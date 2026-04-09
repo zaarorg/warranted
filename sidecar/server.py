@@ -1,0 +1,185 @@
+import json
+import hashlib
+import time
+import base64
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    PublicFormat,
+    PrivateFormat,
+    NoEncryption,
+)
+from iatp.attestation import ReputationManager
+from iatp.models import TrustLevel
+
+app = FastAPI()
+
+# ---------------------------------------------------------------------------
+# Crypto identity — generated once at startup
+# ---------------------------------------------------------------------------
+PRIVATE_KEY = Ed25519PrivateKey.generate()
+PUBLIC_KEY = PRIVATE_KEY.public_key()
+PUBLIC_KEY_B64 = base64.b64encode(
+    PUBLIC_KEY.public_bytes(Encoding.Raw, PublicFormat.Raw)
+).decode()
+
+# DID derived from the public key hash (real crypto, not a human label)
+_pub_bytes = PUBLIC_KEY.public_bytes(Encoding.Raw, PublicFormat.Raw)
+_pub_hash = hashlib.sha256(_pub_bytes).hexdigest()
+AGENT_DID = f"did:mesh:{_pub_hash[:40]}"
+
+# ---------------------------------------------------------------------------
+# Reputation / trust
+# ---------------------------------------------------------------------------
+reputation_mgr = ReputationManager()
+AGENT_ID = "openclaw-agent-001"
+_score = reputation_mgr.get_or_create_score(AGENT_ID)
+reputation_mgr.record_success(AGENT_ID, trace_id="boot")
+
+# ---------------------------------------------------------------------------
+# Spending policy (unchanged)
+# ---------------------------------------------------------------------------
+SPENDING_LIMIT = 5000
+APPROVED_VENDORS = ["aws", "azure", "gcp", "github", "vercel", "railway"]
+PERMITTED_CATEGORIES = ["compute", "software-licenses", "cloud-services", "api-credits"]
+
+# Authority chain — DIDs of the delegation chain above this agent
+AUTHORITY_CHAIN = [
+    "did:mesh:cfo",
+    "did:mesh:vp-eng",
+    AGENT_DID,
+]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _sign(payload_bytes: bytes) -> str:
+    """Sign bytes with our Ed25519 private key, return base64 signature."""
+    return base64.b64encode(PRIVATE_KEY.sign(payload_bytes)).decode()
+
+
+def _verify(payload_bytes: bytes, signature_b64: str) -> bool:
+    """Verify an Ed25519 signature against our public key."""
+    try:
+        sig = base64.b64decode(signature_b64)
+        PUBLIC_KEY.verify(sig, payload_bytes)
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+@app.get("/favicon.ico")
+async def favicon():
+    return Response(status_code=204)
+
+
+@app.get("/")
+async def root():
+    return {
+        "service": "warranted-governance-sidecar",
+        "status": "running",
+        "endpoints": [
+            "/check_identity",
+            "/check_authorization",
+            "/sign_transaction",
+            "/verify_signature",
+        ],
+    }
+
+
+@app.get("/check_identity")
+async def check_identity():
+    score = reputation_mgr.get_or_create_score(AGENT_ID)
+    trust_level = reputation_mgr.get_trust_level(AGENT_ID)
+    return {
+        "agent_id": AGENT_ID,
+        "did": AGENT_DID,
+        "public_key": PUBLIC_KEY_B64,
+        "trust_score": score.score,
+        "trust_level": trust_level.value,
+        "lifecycle_state": "active",
+        "spending_limit": SPENDING_LIMIT,
+        "approved_vendors": APPROVED_VENDORS,
+        "authority_chain": AUTHORITY_CHAIN,
+        "status": "verified",
+    }
+
+
+@app.post("/check_authorization")
+async def check_authorization(vendor: str, amount: float, category: str):
+    reasons = []
+    if amount > SPENDING_LIMIT:
+        reasons.append(f"Amount ${amount} exceeds limit of ${SPENDING_LIMIT}")
+    if vendor not in APPROVED_VENDORS:
+        reasons.append(f"Vendor '{vendor}' not on approved list")
+    if category not in PERMITTED_CATEGORIES:
+        reasons.append(f"Category '{category}' not authorized")
+
+    score = reputation_mgr.get_or_create_score(AGENT_ID)
+    trust_level = reputation_mgr.get_trust_level(AGENT_ID)
+
+    return {
+        "authorized": len(reasons) == 0,
+        "reasons": reasons if reasons else ["within policy"],
+        "requires_approval": amount > 1000,
+        "agent_id": AGENT_ID,
+        "did": AGENT_DID,
+        "trust_score": score.score,
+        "trust_level": trust_level.value,
+        "vendor": vendor,
+        "amount": amount,
+        "category": category,
+    }
+
+
+@app.post("/sign_transaction")
+async def sign_transaction(
+    vendor: str, amount: float, item: str, category: str = "compute"
+):
+    auth = await check_authorization(vendor, amount, category)
+    if not auth["authorized"]:
+        return {"signed": False, "reasons": auth["reasons"]}
+
+    payload = json.dumps(
+        {
+            "agent_id": AGENT_ID,
+            "did": AGENT_DID,
+            "vendor": vendor,
+            "amount": amount,
+            "item": item,
+            "timestamp": time.time(),
+            "nonce": hashlib.sha256(str(time.time()).encode()).hexdigest()[:16],
+        },
+        sort_keys=True,
+    )
+
+    signature = _sign(payload.encode())
+
+    return {
+        "signed": True,
+        "payload": json.loads(payload),
+        "signature": signature,
+        "public_key": PUBLIC_KEY_B64,
+        "algorithm": "Ed25519",
+    }
+
+
+@app.get("/verify_signature")
+async def verify_signature(payload: str, signature: str):
+    valid = _verify(payload.encode(), signature)
+    return {
+        "valid": valid,
+        "did": AGENT_DID,
+        "public_key": PUBLIC_KEY_B64,
+        "algorithm": "Ed25519",
+    }
