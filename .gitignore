@@ -1,3 +1,7 @@
+# Claude
+.mcp.json
+.claude/tracking
+
 # Logs
 logs
 *.log
