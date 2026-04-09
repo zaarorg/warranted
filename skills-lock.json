@@ -11,6 +11,16 @@
       "sourceType": "github",
       "computedHash": "51defa57449d1e7a3e51ae6444c111c4424cd47ed1fb96a3eb1dba0c17971c0d"
     },
+    "fastapi-python": {
+      "source": "mindrally/skills",
+      "sourceType": "github",
+      "computedHash": "1d7346210a6690d2faeb089f074c0dc20a7056c2c83ac1062a11c1b73158be72"
+    },
+    "fastapi-templates": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "computedHash": "8fdfb9bad6aef892b4f16ef3b07ef5eea3b0497d37eeaeddb07244d657cc8711"
+    },
     "multi-stage-dockerfile": {
       "source": "github/awesome-copilot",
       "sourceType": "github",
