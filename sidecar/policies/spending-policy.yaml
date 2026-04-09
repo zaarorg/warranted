@@ -1,0 +1,138 @@
+version: "1.0"
+name: warranted-spending-policy
+
+# ============================================================
+# Spending limits
+# ============================================================
+rules:
+  - name: block-over-agent-limit
+    description: Reject transactions exceeding the agent's spending ceiling
+    condition: "action == 'purchase'"
+    action: deny
+    when: "params.amount > context.agent_spending_limit"
+    message: "Transaction amount ${params.amount} exceeds agent limit of ${context.agent_spending_limit}"
+
+  - name: block-over-single-transaction-limit
+    description: Hard cap on any single transaction regardless of agent limit
+    condition: "action == 'purchase'"
+    action: deny
+    when: "params.amount > 25000"
+    message: "No single transaction may exceed $25,000 without manual override"
+
+  # ============================================================
+  # Vendor restrictions
+  # ============================================================
+  - name: block-unapproved-vendor
+    description: Only approved vendors may receive payments
+    condition: "action == 'purchase'"
+    action: deny
+    when: "params.vendor not in context.approved_vendors"
+    message: "Vendor '${params.vendor}' is not on the approved vendor list"
+
+  - name: block-sanctioned-vendor
+    description: Vendors on the sanctions list are always blocked
+    condition: "action == 'purchase'"
+    action: deny
+    when: "params.vendor in context.sanctioned_vendors"
+    message: "Vendor '${params.vendor}' is on the sanctions list"
+
+  # ============================================================
+  # Category restrictions
+  # ============================================================
+  - name: block-unauthorized-category
+    description: Agent may only purchase in its authorized categories
+    condition: "action == 'purchase'"
+    action: deny
+    when: "params.category not in context.agent_permitted_categories"
+    message: "Category '${params.category}' is not authorized for this agent"
+
+  # ============================================================
+  # Rate limiting (confused deputy mitigation)
+  # ============================================================
+  - name: rate-limit-transactions-per-hour
+    description: No more than 10 transactions per rolling hour
+    condition: "action == 'purchase'"
+    action: deny
+    when: "context.transactions_last_hour >= 10"
+    message: "Transaction rate limit exceeded (10/hour)"
+
+  - name: rate-limit-daily-spend
+    description: Rolling 24-hour spend ceiling
+    condition: "action == 'purchase'"
+    action: deny
+    when: "context.spend_last_24h + params.amount > context.daily_spend_limit"
+    message: "Daily spend limit of ${context.daily_spend_limit} would be exceeded"
+
+  # ============================================================
+  # Human-in-the-loop escalation
+  # ============================================================
+  - name: escalate-high-value
+    description: Transactions above threshold require human approval
+    condition: "action == 'purchase'"
+    action: escalate
+    when: "params.amount > context.escalation_threshold"
+    message: "Transaction of ${params.amount} requires human approval (threshold: ${context.escalation_threshold})"
+
+  - name: escalate-new-vendor
+    description: First transaction with a vendor requires human approval
+    condition: "action == 'purchase'"
+    action: escalate
+    when: "params.vendor not in context.previously_used_vendors"
+    message: "First transaction with vendor '${params.vendor}' requires human approval"
+
+  # ============================================================
+  # Cooling-off periods
+  # ============================================================
+  - name: cooling-off-large-purchase
+    description: Purchases above cooling-off threshold are held before settlement
+    condition: "action == 'purchase'"
+    action: hold
+    when: "params.amount > context.cooling_off_threshold"
+    hold_duration_minutes: 30
+    message: "Purchase of ${params.amount} held for 30-minute cooling-off period"
+
+  # ============================================================
+  # Negotiation integrity
+  # ============================================================
+  - name: block-price-below-floor
+    description: Seller agents cannot accept offers below their price floor
+    condition: "action == 'accept_offer'"
+    action: deny
+    when: "params.offer_amount < context.price_floor"
+    message: "Offer of ${params.offer_amount} is below price floor of ${context.price_floor}"
+
+  - name: block-terms-not-in-transcript
+    description: Settlement terms must appear in the negotiation transcript
+    condition: "action == 'settle'"
+    action: escalate
+    when: "params.settlement_hash not in context.observed_transcript_hashes"
+    message: "Settlement contains terms not observed in negotiation transcript"
+
+# ============================================================
+# Default context values
+# Overridden per-agent by the management platform
+# ============================================================
+defaults:
+  agent_spending_limit: 5000
+  daily_spend_limit: 10000
+  escalation_threshold: 1000
+  cooling_off_threshold: 2500
+  approved_vendors:
+    - aws
+    - azure
+    - gcp
+    - github
+    - vercel
+    - railway
+  sanctioned_vendors: []
+  agent_permitted_categories:
+    - compute
+    - software-licenses
+    - cloud-services
+    - api-credits
+    - developer-tools
+  previously_used_vendors: []
+  transactions_last_hour: 0
+  spend_last_24h: 0
+  price_floor: 0
+  observed_transcript_hashes: []
