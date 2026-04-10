@@ -36,8 +36,8 @@ This is **not** a new service. It is a library (`packages/rules-engine/`) consum
 │                       versioning, petitions)                    │
 │  routes/decisions/  ← Decision log query API                   │
 │                                                                 │
-│  middleware/auth    ← Entity-scoped JWT for management          │
-│                       endpoints                                 │
+│  middleware/auth    ← Internal-only (deferred: entity-scoped   │
+│                       JWT when exposed externally)             │
 ├─────────────────────────────────────────────────────────────────┤
 │                   packages/rules-engine/ (library)              │
 │                                                                 │
@@ -45,8 +45,9 @@ This is **not** a new service. It is a library (`packages/rules-engine/`) consum
 │  envelope.ts       ← Envelope resolution (recursive CTE)       │
 │  cedar-gen.ts      ← Structured constraints → Cedar source     │
 │  entity-store.ts   ← Cedar entity store (batch sync)           │
-│  cache.ts          ← Envelope cache with version + NOTIFY      │
-│  petition.ts       ← Petition workflow (request, route, approve)│
+│  cache.ts          ← Envelope cache interface (no-op default)  │
+│  petition.ts       ← Petition data model + API stubs (impl    │
+│                      deferred post-demo)                       │
 │  schema.ts         ← Drizzle schema (fresh, no ltree)          │
 │  types.ts          ← All TypeScript interfaces + Zod schemas   │
 │  errors.ts         ← Engine-specific error codes                │
@@ -187,8 +188,7 @@ UNIQUE constraint on `(orgId, name, parentId)`.
 | `rateWindow` | TEXT (nullable) | e.g. `"1 hour"`, `"1 day"` |
 | `setMembers` | TEXT[] (nullable) | Default allowed members for set kind |
 | `boolDefault` | BOOLEAN (nullable) | Default for boolean kind |
-| `temporalStart` | TIME (nullable) | Default window start for temporal kind |
-| `temporalEnd` | TIME (nullable) | Default window end for temporal kind |
+| `boolRestrictive` | BOOLEAN (nullable) | Which boolean value is more restrictive (true = `true` is restrictive, e.g. `requires_approval`) |
 | `temporalExpiry` | DATE (nullable) | Default expiry date for temporal kind |
 
 UNIQUE constraint on `(actionTypeId, dimensionName)`.
@@ -220,8 +220,7 @@ UNIQUE constraint on `(actionTypeId, dimensionName)`.
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | UUID (PK) | |
-| `policyId` | UUID (FK → policies) | CASCADE delete |
-| `policyVersionId` | UUID (FK → policy_versions) | |
+| `policyId` | UUID (FK → policies) | CASCADE delete. The active version is always `policies.activeVersionId` — no version pinning on assignments. |
 | `groupId` | UUID (FK → groups, nullable) | CHECK: exactly one of `groupId` or `agentDid` |
 | `agentDid` | TEXT (nullable) | References registry agent DID |
 | `assignedAt` | TIMESTAMPTZ | |
@@ -284,7 +283,7 @@ WITH RECURSIVE ancestors AS (
   -- Recurse: walk up parent chain
   SELECT g.id, g.parent_id, g.name, g.node_type, a.depth + 1
   FROM groups g
-  JOIN ancestors a ON a.id = g.parent_id -- typo fix: should be g.id = a.parent_id
+  JOIN ancestors a ON g.id = a.parent_id
 )
 SELECT * FROM ancestors;
 ```
@@ -318,8 +317,8 @@ type DimensionConstraint =
   | { name: string; kind: "numeric"; max: number }
   | { name: string; kind: "rate"; limit: number; window: string }
   | { name: string; kind: "set"; members: string[] }
-  | { name: string; kind: "boolean"; value: boolean }
-  | { name: string; kind: "temporal"; start?: string; end?: string; expiry?: string };
+  | { name: string; kind: "boolean"; value: boolean; restrictive: boolean }
+  | { name: string; kind: "temporal"; expiry: string };
 ```
 
 **Example (org-level purchase policy):**
@@ -333,8 +332,8 @@ type DimensionConstraint =
       { "name": "amount", "kind": "numeric", "max": 5000 },
       { "name": "vendor", "kind": "set", "members": ["aws", "azure", "gcp", "github", "vercel", "railway", "vendor-acme-001"] },
       { "name": "category", "kind": "set", "members": ["compute", "software-licenses", "cloud-services", "api-credits"] },
-      { "name": "requires_human_approval", "kind": "boolean", "value": false },
-      { "name": "business_hours", "kind": "temporal", "start": "09:00", "end": "17:00", "expiry": "2026-12-31" }
+      { "name": "requires_human_approval", "kind": "boolean", "value": false, "restrictive": true },
+      { "name": "budget_expiry", "kind": "temporal", "expiry": "2026-12-31" }
     ]
   }
 ]
@@ -385,9 +384,22 @@ interface DimensionSource {
 |------|-----------|---------|
 | `numeric` | Minimum `max` across all sources | Org: 5000, Team: 2000 → **2000** |
 | `set` | Intersection of `members` | Org: [aws, azure, gcp], Team: [aws, gcp] → **[aws, gcp]** |
-| `boolean` | OR (any `true` wins) | Org: false, Team: true → **true** |
-| `temporal` | Tightest window (latest start, earliest end, earliest expiry) | Org: 9-17, Team: 9-12 → **9-12** |
+| `boolean` | Most restrictive wins (see below) | Org: false, Team: true → depends on dimension semantics |
+| `temporal` | Earliest `expiry` across all sources | Org: 2026-12-31, Team: 2026-06-30 → **2026-06-30** |
 | `rate` | Minimum `limit` (same window) | Org: 10/hour, Team: 5/hour → **5/hour** |
+
+### Boolean Dimension Semantics
+
+Boolean dimensions require a `restrictive` flag in their dimension definition to indicate which value is "more restrictive." The envelope resolver always picks the more restrictive value (narrowing only).
+
+- **Gate booleans** (`requires_human_approval`): `restrictive: true` — meaning `true` is the more restrictive value. Org: `false`, Team: `true` → resolved: **`true`** (approval required, narrower).
+- **Permission booleans** (`allow_external_vendors`): `restrictive: false` — meaning `false` is the more restrictive value. Org: `true`, Team: `false` → resolved: **`false`** (external vendors blocked, narrower).
+
+The `restrictive` field is stored on `dimension_definitions` and included in the `DimensionConstraint` type:
+
+```typescript
+  | { name: string; kind: "boolean"; value: boolean; restrictive: boolean }
+```
 
 ### Deny Overrides
 
@@ -399,7 +411,7 @@ A `deny`-effect policy at any level beats `allow`-effect policies from all level
 2. Walk ancestors using recursive CTE.
 3. Collect all policy assignments from ancestor groups + direct agent assignments.
 4. Load active policy versions with their JSONB constraints.
-5. Check for approved petitions — if a petition grants a one-time exception for a dimension, temporarily widen that dimension for this evaluation.
+5. *(Future)* Check for approved petitions — if a petition grants a one-time exception for a dimension, temporarily widen that dimension for this evaluation.
 6. Resolve dimensions using intersection semantics per kind.
 7. Apply deny overrides — any deny-effect policy sets `denied: true` on its action.
 8. Return the resolved envelope with full provenance chain.
@@ -484,9 +496,8 @@ permit (
 )
 when {
   context.amount <= 5000 &&
-  context.vendor in ["aws", "azure", "gcp", "github", "vercel", "railway", "vendor-acme-001"] &&
-  context.category in ["compute", "software-licenses", "cloud-services", "api-credits"] &&
-  context.hour >= 9 && context.hour < 17
+  [context.vendor].containsAny(["aws", "azure", "gcp", "github", "vercel", "railway", "vendor-acme-001"]) &&
+  [context.category].containsAny(["compute", "software-licenses", "cloud-services", "api-credits"])
 };
 ```
 
@@ -501,13 +512,28 @@ forbid (
   resource
 )
 when {
-  context.vendor in ["sanctioned-vendor-001"]
+  [context.vendor].containsAny(["sanctioned-vendor-001"])
 };
 ```
 
 ### Bundle Hash
 
 The bundle hash is computed as `SHA-256(sort(all_active_cedar_sources).join('\n'))`. Every decision log entry records this hash, proving exactly which set of rules governed the decision.
+
+### Rate Dimensions in Cedar
+
+Cedar evaluates a single request — it has no concept of request frequency or rolling windows. Rate limits are enforced by the **caller providing runtime state** as numeric context values. The caller (sidecar or storefront SDK) queries the ledger or accumulator for the current count and passes it in the check request context.
+
+For example, a rate limit of "10 transactions per hour" is expressed in Cedar as:
+
+```cedar
+permit (...)
+when {
+  context.transactions_last_hour <= 10
+};
+```
+
+The caller is responsible for computing `transactions_last_hour` before calling the rules engine. The rules engine treats it as a plain numeric comparison.
 
 ---
 
@@ -522,7 +548,7 @@ The rules engine returns **both** engine-specific codes and SDK-compatible codes
 | `POLICY_DENIED` | Cedar evaluation returned Deny |
 | `DIMENSION_EXCEEDED` | Numeric dimension exceeded (amount > max) |
 | `DIMENSION_NOT_IN_SET` | Set dimension violation (vendor/category not in allowed list) |
-| `DIMENSION_OUTSIDE_WINDOW` | Temporal dimension violation (outside allowed time window) |
+| `DIMENSION_OUTSIDE_WINDOW` | Temporal dimension violation (policy has expired) |
 | `DIMENSION_RATE_EXCEEDED` | Rate limit exceeded |
 | `DIMENSION_BOOLEAN_BLOCKED` | Boolean dimension blocks the action |
 | `ENVELOPE_EMPTY` | Agent has no policies granting this action |
@@ -641,9 +667,9 @@ This happens when a policy was updated after the JWT was issued, narrowing the a
 
 ## Envelope Cache
 
-### Cache Strategy
+### Strategy: Interface Now, Optimization Later
 
-Resolved envelopes are cached per agent DID with invalidation driven by a hybrid version counter + Postgres NOTIFY mechanism.
+The spec defines the `EnvelopeCache` interface but defers caching strategy to a future optimization phase. The default implementation always recomputes (no caching). Implementations MAY cache resolved envelopes, but the spec does not prescribe how.
 
 ```typescript
 interface EnvelopeCache {
@@ -660,32 +686,21 @@ interface CachedEnvelope {
 }
 ```
 
-### Version Counter
+### Default Implementation: No-Op Cache
 
-Every mutation to policies, assignments, or memberships increments `organizations.policyVersion` within the same transaction. On cache read, compare the cached `policyVersion` against the current org version. Stale entries are recomputed.
+The `NoOpEnvelopeCache` always returns `null` on `get()`, forcing fresh resolution on every request. This is correct and sufficient for demo/early-stage usage. Envelope resolution is fast (a few DB queries + intersection logic).
 
-### Postgres NOTIFY (Cross-Process)
+### Future: Version Counter + Invalidation
 
-For multi-process deployments (e.g., multiple API server instances), a Postgres `NOTIFY` channel broadcasts invalidation events:
-
-```sql
--- Trigger on policy_assignments, agent_group_memberships, policy_versions
-NOTIFY policy_change, '{"orgId": "...", "version": 42}';
-```
-
-The rules engine library listens on this channel and invalidates local caches when events arrive.
-
-### Invalidation Scope
-
-When a policy assignment changes on a group, all agents who are members of that group **and all descendant groups** must be invalidated. The descendant query (recursive CTE) computes the affected agent DIDs.
+When caching becomes necessary, the `organizations.policyVersion` counter (already incremented atomically on every policy mutation) provides the staleness signal. A cached envelope whose `policyVersion` is less than the current org version is stale and must be recomputed. Cross-process invalidation (e.g., Postgres NOTIFY) is a further optimization for multi-process deployments.
 
 ---
 
-## Petitioning
+## Petitioning (API Stubs Only — Implementation Post-Demo)
 
-Agents can request one-time exceptions to policy denials. Petitions route to the lowest authority in the group hierarchy whose envelope would permit the requested exception.
+Agents can request one-time exceptions to policy denials. The spec defines the data model, API endpoints, and routing algorithm, but **implementation is deferred to post-demo**. Phase 5 delivers endpoint stubs that return `501 Not Implemented` with the correct response shapes.
 
-### Workflow
+### Design (for future implementation)
 
 ```
 Agent denied (OVER_LIMIT, $6000 > $5000)
@@ -764,7 +779,7 @@ GET /api/policies/petitions/:id
 
 ## Management API
 
-All management endpoints require entity-scoped JWT authentication. The JWT must include an `orgId` claim matching the resources being modified and an `admin` or `policy-admin` role.
+All management endpoints are internal-only for now — accessible only within the Docker network. No application-level authentication is required. Entity-scoped JWT auth for management endpoints is deferred to a future phase when the API is exposed externally.
 
 ### Policy CRUD
 
@@ -845,7 +860,6 @@ async def check_authorization(vendor: str, amount: float, category: str):
             "amount": amount,
             "vendor": vendor,
             "category": category,
-            "hour": datetime.now().hour,
         }
     }
 
@@ -895,7 +909,7 @@ All 14 action types from the existing rules engine, organized by domain.
 
 | Action | Dimensions |
 |--------|-----------|
-| `purchase.initiate` | amount (numeric), vendor (set), category (set), requires_human_approval (boolean), business_hours (temporal) |
+| `purchase.initiate` | amount (numeric), vendor (set), category (set), requires_human_approval (boolean), budget_expiry (temporal) |
 | `purchase.approve` | amount (numeric), approval_level (set) |
 | `budget.allocate` | amount (numeric), department (set) |
 | `budget.transfer` | amount (numeric), source_department (set), target_department (set) |
@@ -1020,8 +1034,8 @@ packages/rules-engine/__tests__/
 ├── cedar-gen.test.ts                # Cedar source generation: deterministic output, snapshot tests
 ├── cedar-eval.test.ts               # Cedar WASM evaluation: permit, deny, entity hierarchy
 ├── entity-store.test.ts             # Entity store: build from DB, batch sync, agent-group relationships
-├── cache.test.ts                    # Cache: get/set, version invalidation, NOTIFY integration
-├── petition.test.ts                 # Petition: routing, approval, expiry, envelope integration
+├── cache.test.ts                    # Cache: interface compliance, NoOpCache behavior
+├── petition.test.ts                 # Petition: data model validation, stub endpoints return 501
 ├── errors.test.ts                   # Error code mapping: engine → SDK, dual response format
 ├── integration.test.ts              # End-to-end: policy CRUD → Cedar gen → evaluate → decision log
 └── seed.test.ts                     # Seed data: all YAML rules represented, correct hierarchy
@@ -1043,14 +1057,19 @@ describe("envelope resolution", () => {
     // Agent in Team → resolved vendors: [aws, gcp]
   });
 
-  it("resolves boolean dimensions with OR semantics", async () => {
-    // Org: requires_approval false, Team: requires_approval true
-    // Agent in Team → requires_approval: true
+  it("resolves gate boolean dimensions (restrictive=true) to true if any source is true", async () => {
+    // Org: requires_approval false, Team: requires_approval true (restrictive=true)
+    // Agent in Team → requires_approval: true (true is more restrictive)
   });
 
-  it("resolves temporal dimensions to tightest window", async () => {
-    // Org: 9-17, Team: 9-12
-    // Agent in Team → 9-12
+  it("resolves permission boolean dimensions (restrictive=false) to false if any source is false", async () => {
+    // Org: allow_external true, Team: allow_external false (restrictive=false)
+    // Agent in Team → allow_external: false (false is more restrictive)
+  });
+
+  it("resolves temporal dimensions to earliest expiry", async () => {
+    // Org: expiry 2026-12-31, Team: expiry 2026-06-30
+    // Agent in Team → expiry: 2026-06-30
   });
 
   it("deny policy overrides all permits", async () => {
@@ -1096,10 +1115,10 @@ describe("cedar generation", () => {
 
   it("handles all dimension kinds in when clause", () => {
     // numeric: context.amount <= N
-    // set: context.vendor in [...]
+    // set: [context.vendor].containsAny([...])
     // boolean: context.requires_approval == true
-    // temporal: context.hour >= N && context.hour < M
-    // rate: (rate limits expressed as numeric in Cedar)
+    // temporal: (expiry checked at resolution time, not in Cedar)
+    // rate: context.transactions_last_hour <= N (caller-provided numeric)
   });
 });
 ```
@@ -1133,35 +1152,32 @@ describe("two-phase authorization", () => {
 });
 ```
 
-#### Petitioning
+#### Petitioning (Stubs)
 
 ```typescript
 describe("petitioning", () => {
-  it("routes petition to lowest authority that covers the exception", () => {
-    // Agent in Team (limit 2000), Dept (limit 5000), Org (limit 25000)
-    // Request: amount 6000 → routes to Org (lowest that permits 6000)
+  it("petition data model validates with Zod", () => {
+    // Verify petition schema validates correct input and rejects invalid input
   });
 
-  it("routes to org root when no level permits the request", () => {});
-
-  it("approved petition temporarily widens dimension", () => {
-    // After approval, envelope resolution returns the petitioned value
+  it("petition endpoints return 501 Not Implemented", () => {
+    // POST /api/policies/petitions → 501
+    // POST /api/policies/petitions/:id/decide → 501
   });
 
-  it("expired petition has no effect on envelope", () => {});
-
-  it("petition requires entity-scoped JWT for approval", () => {});
+  it("petition response shapes match spec", () => {
+    // 501 response includes the documented response structure for future implementation
+  });
 });
 ```
 
-#### Cache Invalidation
+#### Cache Interface
 
 ```typescript
-describe("cache invalidation", () => {
-  it("invalidates on policy version change", () => {});
-  it("invalidates all descendants when group policy changes", () => {});
-  it("version counter prevents stale reads", () => {});
-  it("recomputes envelope after invalidation", () => {});
+describe("cache interface", () => {
+  it("NoOpEnvelopeCache always returns null on get", () => {});
+  it("NoOpEnvelopeCache set is a no-op", () => {});
+  it("EnvelopeCache interface is implemented correctly", () => {});
 });
 ```
 
@@ -1244,7 +1260,7 @@ describe("seed data", () => {
 **Deliverables:**
 - Update `packages/storefront-sdk/src/verify.ts` — `verifyAuthorization()` becomes two-phase: local check + engine check. Add `retryHint` field to response.
 - Update `sidecar/server.py` — `/check_authorization` proxies to rules engine. `/sign_transaction` calls engine before signing (coupled).
-- `packages/rules-engine/src/cache.ts` — `EnvelopeCache` with version counter + NOTIFY listener
+- `packages/rules-engine/src/cache.ts` — `EnvelopeCache` interface + `NoOpEnvelopeCache` default implementation
 - Delete `sidecar/policies/spending-policy.yaml` — policies now in DB only
 
 **Tests:**
@@ -1258,18 +1274,18 @@ describe("seed data", () => {
 
 ### Phase 5: Petitioning + Management API
 
-**Goal:** Agents can petition policy denials. Admins manage policies via authenticated API.
+**Goal:** Management API for policy CRUD. Petition endpoint stubs defined but not implemented.
 
 **Deliverables:**
-- `packages/rules-engine/src/petition.ts` — petition routing (lowest sufficient authority), approval/denial, expiry, envelope integration
-- `apps/api/src/routes/policies/` — all management API routes (CRUD, assignments, versions, petitions, decisions, action types)
-- `apps/api/src/middleware/policy-auth.ts` — entity-scoped JWT auth for management endpoints
+- `packages/rules-engine/src/petition.ts` — petition data model and types only (routing/approval logic deferred)
+- `apps/api/src/routes/policies/` — all management API routes (CRUD, assignments, versions, decisions, action types). Petition endpoints return `501 Not Implemented` with correct response shapes.
+- Management API is internal-only (no auth middleware). Auth deferred to when API is exposed externally.
 
 **Tests:**
-- `petition.test.ts` — routing algorithm, approval widens envelope, expiry, entity-scoped auth
 - Management API endpoint tests: CRUD operations, assignment validation, version creation with Cedar gen
+- `petition.test.ts` — data model validation, stub endpoints return 501
 
-**Demo checkpoint:** Agent gets denied → files petition → admin approves → agent retries → approved. Full cycle logged in decision log.
+**Demo checkpoint:** Create and modify policies via the management API. Assign policies to groups. Create new policy versions with Cedar generation. Query decision log. Petition endpoints return 501 with documented response shapes.
 
 ---
 
@@ -1302,7 +1318,7 @@ describe("seed data", () => {
 | Cedar entity loading? | Fix it — load entities for native `principal in Group` |
 | Testing bar? | Full test suite from day 1 |
 | Cedar runtime? | WASM in-process (pre-built artifact) |
-| Cache strategy? | Cache with invalidation (version counter + NOTIFY) |
+| Cache strategy? | Spec defines interface only; NoOpCache default. Caching deferred as optimization. |
 | Runtime state owner? | Caller provides context |
 | API surface? | Tiered — flat for agents, rich for admins |
 | Management home? | Split — library + API routes |
@@ -1314,13 +1330,13 @@ describe("seed data", () => {
 | Authorization call site? | Two-phase: fast local + authoritative engine |
 | Policy source of truth? | Database only (YAML deleted) |
 | Two-phase gap handling? | Soft deny with retry hint |
-| Petitioning? | In scope — full design |
-| Management auth? | Entity-scoped JWT |
+| Petitioning? | In scope — API stubs only (data model + endpoints defined, implementation deferred post-demo) |
+| Management auth? | Deferred — internal-only (network-level). Entity-scoped JWT when exposed externally. |
 | Policy mutation atomicity? | Atomic — all or nothing |
 | Schema migration? | Fresh Drizzle schema, seed migration |
 | Dashboard scope? | All three features (envelope, REPL, Cedar viewer) |
-| Petition routing? | Lowest authority that covers the exception |
-| Temporal dimensions? | Full support (time-of-day + expiry) |
+| Petition routing? | Lowest authority that covers the exception (design documented, implementation deferred) |
+| Temporal dimensions? | Expiry only (no time-of-day windows). Time-of-day deferred. |
 | Sign coupling? | Coupled — sign-if-approved |
 | Hierarchy implementation? | Adjacency list + recursive CTE (no ltree) |
 | Phasing? | 6 fine-grained phases |
