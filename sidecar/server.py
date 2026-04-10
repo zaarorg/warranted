@@ -72,6 +72,12 @@ AUTHORITY_CHAIN = [
     AGENT_DID,
 ]
 
+# ---------------------------------------------------------------------------
+# Rules Engine integration
+# ---------------------------------------------------------------------------
+RULES_ENGINE_URL = os.environ.get("RULES_ENGINE_URL", "")
+AGENT_RULES_ENGINE_ID = os.environ.get("AGENT_RULES_ENGINE_ID", "")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -89,6 +95,39 @@ def _verify(payload_bytes: bytes, signature_b64: str) -> bool:
         return True
     except Exception:
         return False
+
+
+async def _check_rules_engine(vendor: str, amount: float, category: str) -> dict | None:
+    """Call the rules engine POST /check endpoint. Returns None if unreachable."""
+    if not RULES_ENGINE_URL or not AGENT_RULES_ENGINE_ID:
+        return None
+
+    check_request = {
+        "principal": f'Agent::"{AGENT_RULES_ENGINE_ID}"',
+        "action": 'Action::"purchase.initiate"',
+        "resource": 'Resource::"any"',
+        "context": {
+            "amount": amount,
+            "vendor": vendor,
+        },
+    }
+
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{RULES_ENGINE_URL}/check",
+                json=check_request,
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except ImportError:
+        logger.warning("httpx not installed, skipping rules engine")
+        return None
+    except Exception as e:
+        logger.warning(f"Rules engine unreachable: {e}")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +173,48 @@ async def check_identity():
 
 @app.post("/check_authorization")
 async def check_authorization(vendor: str, amount: float, category: str):
+    score = reputation_mgr.get_or_create_score(AGENT_ID)
+    trust_level = reputation_mgr.get_trust_level(AGENT_ID)
+
+    # Try rules engine first
+    cedar_result = await _check_rules_engine(vendor, amount, category)
+
+    if cedar_result is not None:
+        authorized = cedar_result.get("decision") == "Allow"
+        diagnostics = cedar_result.get("diagnostics", [])
+
+        # Dual-layer category enforcement: Cedar doesn't check category yet,
+        # so enforce it locally even if Cedar says Allow
+        if authorized and category not in PERMITTED_CATEGORIES:
+            authorized = False
+
+        reasons = []
+        if not authorized:
+            if amount > SPENDING_LIMIT:
+                reasons.append(f"Amount ${amount} exceeds limit of ${SPENDING_LIMIT}")
+            if vendor not in APPROVED_VENDORS:
+                reasons.append(f"Vendor '{vendor}' not on approved list")
+            if category not in PERMITTED_CATEGORIES:
+                reasons.append(f"Category '{category}' not authorized")
+            if not reasons:
+                reasons.append("Denied by policy engine")
+
+        return {
+            "authorized": authorized,
+            "reasons": reasons if reasons else ["within policy"],
+            "requires_approval": amount > 1000,
+            "agent_id": AGENT_ID,
+            "did": AGENT_DID,
+            "trust_score": score.score,
+            "trust_level": trust_level.value,
+            "vendor": vendor,
+            "amount": amount,
+            "category": category,
+            "policy_engine": "cedar",
+            "diagnostics": diagnostics,
+        }
+
+    # Fallback: local checks (rules engine unreachable or not configured)
     reasons = []
     if amount > SPENDING_LIMIT:
         reasons.append(f"Amount ${amount} exceeds limit of ${SPENDING_LIMIT}")
@@ -141,9 +222,6 @@ async def check_authorization(vendor: str, amount: float, category: str):
         reasons.append(f"Vendor '{vendor}' not on approved list")
     if category not in PERMITTED_CATEGORIES:
         reasons.append(f"Category '{category}' not authorized")
-
-    score = reputation_mgr.get_or_create_score(AGENT_ID)
-    trust_level = reputation_mgr.get_trust_level(AGENT_ID)
 
     return {
         "authorized": len(reasons) == 0,
@@ -156,6 +234,7 @@ async def check_authorization(vendor: str, amount: float, category: str):
         "vendor": vendor,
         "amount": amount,
         "category": category,
+        "policy_engine": "local",
     }
 
 
