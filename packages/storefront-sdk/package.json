@@ -12,6 +12,14 @@
     "jose": "^6.0.11",
     "zod": "^3.24.2"
   },
+  "peerDependencies": {
+    "hono": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "hono": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^22.14.1",
     "typescript": "^5.8.3",

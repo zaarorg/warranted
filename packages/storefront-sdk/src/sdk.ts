@@ -5,6 +5,8 @@ import {
   type DisputeEvent,
   type RefundEvent,
 } from "./types";
+import { createHandler } from "./handlers";
+import { createHonoApp } from "./hono-adapter";
 
 type SettlementHandler = (event: SettlementEvent) => Promise<void> | void;
 type DisputeHandler = (event: DisputeEvent) => Promise<void> | void;
@@ -13,13 +15,14 @@ type RefundHandler = (event: RefundEvent) => Promise<void> | void;
 /**
  * Core SDK class for mounting governed agent transaction endpoints.
  *
- * Validates configuration at construction time. In Phase 1 this is a
- * skeleton — `.fetch()` returns 404 for every path and `.routes()` is
- * a placeholder.
+ * Validates configuration at construction time. `.fetch()` dispatches
+ * to manifest, catalog, and session handlers. `.routes()` returns a
+ * Hono app for easy mounting.
  */
 export class WarrantedSDK {
   public readonly config: WarrantedSDKConfig;
 
+  private handler: (request: Request) => Promise<Response>;
   private settlementHandlers: SettlementHandler[] = [];
   private disputeHandlers: DisputeHandler[] = [];
   private refundHandlers: RefundHandler[] = [];
@@ -33,28 +36,23 @@ export class WarrantedSDK {
       throw new Error(`Invalid WarrantedSDK config: ${issues}`);
     }
     this.config = result.data;
+    this.handler = createHandler(this.config);
   }
 
   /**
    * Web Standard fetch handler. Routes incoming requests to SDK
    * endpoints. Returns a 404 JSON response for unmatched paths.
    */
-  async fetch(_request: Request): Promise<Response> {
-    return new Response(
-      JSON.stringify({
-        success: false,
-        error: { code: "NOT_FOUND", message: "Not found" },
-      }),
-      { status: 404, headers: { "Content-Type": "application/json" } }
-    );
+  async fetch(request: Request): Promise<Response> {
+    return this.handler(request);
   }
 
   /**
-   * Returns an adapter suitable for mounting with Hono's `app.route()`.
-   * Placeholder until Phase 2.
+   * Returns a Hono app wrapping the SDK's fetch handler, suitable
+   * for mounting with `app.route('/', sdk.routes())`.
    */
-  routes(): { fetch: (request: Request) => Promise<Response> } {
-    return { fetch: (req: Request) => this.fetch(req) };
+  routes() {
+    return createHonoApp(this);
   }
 
   /** Register a callback for settlement events. */

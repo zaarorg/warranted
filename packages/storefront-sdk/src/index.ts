@@ -1,4 +1,8 @@
 export { WarrantedSDK } from "./sdk";
+export { generateManifest } from "./manifest";
+export { createCatalogResponse } from "./catalog";
+export { createHandler } from "./handlers";
+export { createHonoApp } from "./hono-adapter";
 
 export {
   // Zod schemas
