@@ -4,6 +4,34 @@ export { createCatalogResponse } from "./catalog";
 export { createHandler } from "./handlers";
 export { createHonoApp } from "./hono-adapter";
 
+// Phase 3: Verification
+export {
+  decodeAndVerifyJWT,
+  decodeJWTUnsafe,
+  createTestToken,
+  createExpiredTestToken,
+  getTestPublicKey,
+  type AgentTokenClaims,
+} from "./jwt";
+
+export {
+  type RegistryClient,
+  type RegistryAgentRecord,
+  SidecarRegistryClient,
+  MockRegistryClient,
+} from "./registry-client";
+
+export {
+  verifyIdentity,
+  verifyAuthorization,
+  type AuthorizationResult,
+} from "./verify";
+
+export {
+  createVerificationMiddleware,
+  getVerifiedAgent,
+} from "./middleware";
+
 export {
   // Zod schemas
   CatalogItemSchema,
