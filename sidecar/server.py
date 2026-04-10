@@ -1,5 +1,7 @@
 import json
 import hashlib
+import logging
+import os
 import time
 import base64
 from fastapi import FastAPI, HTTPException
@@ -18,12 +20,26 @@ from cryptography.hazmat.primitives.serialization import (
 from iatp.attestation import ReputationManager
 from iatp.models import TrustLevel
 
+logger = logging.getLogger("warranted-sidecar")
+
 app = FastAPI()
 
 # ---------------------------------------------------------------------------
-# Crypto identity — generated once at startup
+# Crypto identity — deterministic from seed or random at startup
 # ---------------------------------------------------------------------------
-PRIVATE_KEY = Ed25519PrivateKey.generate()
+ED25519_SEED = os.environ.get("ED25519_SEED")
+
+if ED25519_SEED:
+    # Derive a deterministic 32-byte seed from the env var
+    _seed_bytes = hashlib.sha256(ED25519_SEED.encode()).digest()
+    PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(_seed_bytes)
+    logger.info("Ed25519 key derived from ED25519_SEED (deterministic)")
+else:
+    PRIVATE_KEY = Ed25519PrivateKey.generate()
+    logger.warning(
+        "ED25519_SEED not set — using random key. DID will change on restart."
+    )
+
 PUBLIC_KEY = PRIVATE_KEY.public_key()
 PUBLIC_KEY_B64 = base64.b64encode(
     PUBLIC_KEY.public_bytes(Encoding.Raw, PublicFormat.Raw)
@@ -93,6 +109,7 @@ async def root():
             "/check_authorization",
             "/sign_transaction",
             "/verify_signature",
+            "/issue_token",
         ],
     }
 
@@ -182,4 +199,42 @@ async def verify_signature(payload: str, signature: str):
         "did": AGENT_DID,
         "public_key": PUBLIC_KEY_B64,
         "algorithm": "Ed25519",
+    }
+
+
+@app.post("/issue_token")
+async def issue_token():
+    """Issue a JWT signed with the sidecar's Ed25519 private key (EdDSA)."""
+    import jwt
+    from datetime import datetime, timezone
+
+    now = int(time.time())
+    exp = now + 86400  # 24 hours
+
+    claims = {
+        "sub": AGENT_DID,
+        "iss": "warranted-sidecar",
+        "iat": now,
+        "exp": exp,
+        "agentId": AGENT_ID,
+        "spendingLimit": SPENDING_LIMIT,
+        "dailySpendLimit": SPENDING_LIMIT * 2,
+        "categories": PERMITTED_CATEGORIES,
+        "approvedVendors": APPROVED_VENDORS,
+        "authorityChain": AUTHORITY_CHAIN,
+    }
+
+    # PyJWT needs PEM-encoded private key for EdDSA
+    private_key_pem = PRIVATE_KEY.private_bytes(
+        Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
+    )
+
+    token = jwt.encode(claims, private_key_pem, algorithm="EdDSA")
+
+    expires_at = datetime.fromtimestamp(exp, tz=timezone.utc).isoformat()
+
+    return {
+        "token": token,
+        "did": AGENT_DID,
+        "expires_at": expires_at,
     }

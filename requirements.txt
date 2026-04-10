@@ -3,3 +3,4 @@ agentmesh-runtime
 inter-agent-trust-protocol
 fastapi
 uvicorn
+PyJWT[crypto]
