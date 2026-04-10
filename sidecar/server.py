@@ -107,7 +107,7 @@ async def _check_rules_engine(vendor: str, amount: float, category: str) -> dict
         "action": 'Action::"purchase.initiate"',
         "resource": 'Resource::"any"',
         "context": {
-            "amount": amount,
+            "amount": int(amount),
             "vendor": vendor,
         },
     }

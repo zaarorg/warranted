@@ -176,7 +176,7 @@ permit (
 )
 when {
   context.amount <= 5000 &&
-  context.vendor in ["aws", "azure", "gcp", "github", "vercel", "railway", "vendor-acme-001"]
+  ["aws", "azure", "gcp", "github", "vercel", "railway", "vendor-acme-001"].contains(context.vendor)
 };
 CEDAR
 )
