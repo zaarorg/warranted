@@ -5,6 +5,7 @@ import {
   type DisputeEvent,
   type RefundEvent,
 } from "./types";
+import type { RegistryClient } from "./registry-client";
 import { createHandler } from "./handlers";
 import { createHonoApp } from "./hono-adapter";
 
@@ -27,7 +28,7 @@ export class WarrantedSDK {
   private disputeHandlers: DisputeHandler[] = [];
   private refundHandlers: RefundHandler[] = [];
 
-  constructor(raw: unknown) {
+  constructor(raw: unknown, registryClient?: RegistryClient) {
     const result = WarrantedSDKConfigSchema.safeParse(raw);
     if (!result.success) {
       const issues = result.error.issues
@@ -36,7 +37,7 @@ export class WarrantedSDK {
       throw new Error(`Invalid WarrantedSDK config: ${issues}`);
     }
     this.config = result.data;
-    this.handler = createHandler(this.config);
+    this.handler = createHandler(this.config, registryClient);
   }
 
   /**

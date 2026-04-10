@@ -1,6 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { createHandler } from "../src/handlers";
+import { MockRegistryClient } from "../src/registry-client";
+import type { RegistryAgentRecord } from "../src/registry-client";
+import { createTestToken, getTestPublicKey } from "../src/jwt";
 import type { WarrantedSDKConfig } from "../src/types";
+
+const TEST_SEED = "test-seed-123";
 
 const CONFIG: WarrantedSDKConfig = {
   vendorId: "vendor-acme-001",
@@ -31,8 +36,36 @@ const CONFIG: WarrantedSDKConfig = {
   ],
 };
 
+const pubKeyBytes = getTestPublicKey(TEST_SEED);
+const pubKeyB64 = Buffer.from(pubKeyBytes).toString("base64");
+
+function createMockRegistry(): MockRegistryClient {
+  const agents = new Map<string, RegistryAgentRecord>();
+  agents.set("did:mesh:8ae56e6f93037f8ab8adefd7ee076e66bc3c98c6", {
+    did: "did:mesh:8ae56e6f93037f8ab8adefd7ee076e66bc3c98c6",
+    publicKey: pubKeyB64,
+    trustScore: 850,
+    lifecycleState: "active",
+    owner: "openclaw-agent-001",
+    spendingLimit: 5000,
+    approvedVendors: ["aws", "gcp", "azure", "vendor-acme-001"],
+    categories: ["compute", "software-licenses"],
+  });
+  return new MockRegistryClient(agents);
+}
+
+let validToken: string;
+
+beforeAll(async () => {
+  validToken = await createTestToken(
+    { approvedVendors: ["aws", "gcp", "azure", "vendor-acme-001"] },
+    TEST_SEED
+  );
+});
+
 describe("createHandler", () => {
-  const handler = createHandler(CONFIG);
+  const registry = createMockRegistry();
+  const handler = createHandler(CONFIG, registry);
 
   describe("manifest endpoint", () => {
     it("returns manifest at /.well-known/agent-storefront.json", async () => {
@@ -58,8 +91,10 @@ describe("createHandler", () => {
   });
 
   describe("catalog endpoint", () => {
-    it("returns catalog at /agent-checkout/catalog", async () => {
-      const req = new Request("http://localhost/agent-checkout/catalog");
+    it("returns catalog at /agent-checkout/catalog with valid auth", async () => {
+      const req = new Request("http://localhost/agent-checkout/catalog", {
+        headers: { Authorization: `Bearer ${validToken}` },
+      });
       const res = await handler(req);
 
       expect(res.status).toBe(200);
@@ -72,12 +107,18 @@ describe("createHandler", () => {
       expect(body.items[0].sku).toBe("gpu-hours-100");
     });
 
-    it("returns 404 for POST to catalog path", async () => {
+    it("returns 401 for catalog without auth", async () => {
+      const req = new Request("http://localhost/agent-checkout/catalog");
+      const res = await handler(req);
+      expect(res.status).toBe(401);
+    });
+
+    it("returns 401 for POST to catalog path without auth", async () => {
       const req = new Request("http://localhost/agent-checkout/catalog", {
         method: "POST",
       });
       const res = await handler(req);
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(401);
     });
   });
 
@@ -93,10 +134,10 @@ describe("createHandler", () => {
       expect(body.error.message).toBe("Not found");
     });
 
-    it("returns 404 for /agent-checkout root", async () => {
-      const req = new Request("http://localhost/agent-checkout");
+    it("returns 401 for /agent-checkout/ without auth", async () => {
+      const req = new Request("http://localhost/agent-checkout/");
       const res = await handler(req);
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(401);
     });
   });
 });
