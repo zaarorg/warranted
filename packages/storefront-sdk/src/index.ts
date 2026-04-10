@@ -32,6 +32,26 @@ export {
   getVerifiedAgent,
 } from "./middleware";
 
+// Phase 4: Sessions, Receipts, Webhooks
+export {
+  type SessionStore,
+  InMemorySessionStore,
+  SessionManager,
+} from "./session";
+
+export {
+  ReceiptGenerator,
+  computeReceiptHash,
+  type VendorConfig,
+} from "./receipt";
+
+export {
+  WebhookEmitter,
+  type SettlementHandler,
+  type DisputeHandler,
+  type RefundHandler,
+} from "./webhook";
+
 export {
   // Zod schemas
   CatalogItemSchema,
