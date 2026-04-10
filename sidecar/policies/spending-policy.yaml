@@ -124,6 +124,7 @@ defaults:
     - github
     - vercel
     - railway
+    - vendor-acme-001
   sanctioned_vendors: []
   agent_permitted_categories:
     - compute

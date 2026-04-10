@@ -62,7 +62,7 @@ reputation_mgr.record_success(AGENT_ID, trace_id="boot")
 # Spending policy (unchanged)
 # ---------------------------------------------------------------------------
 SPENDING_LIMIT = 5000
-APPROVED_VENDORS = ["aws", "azure", "gcp", "github", "vercel", "railway"]
+APPROVED_VENDORS = ["aws", "azure", "gcp", "github", "vercel", "railway", "vendor-acme-001"]
 PERMITTED_CATEGORIES = ["compute", "software-licenses", "cloud-services", "api-credits"]
 
 # Authority chain — DIDs of the delegation chain above this agent
