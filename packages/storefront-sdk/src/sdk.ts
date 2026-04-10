@@ -1,17 +1,14 @@
 import {
   WarrantedSDKConfigSchema,
   type WarrantedSDKConfig,
-  type SettlementEvent,
-  type DisputeEvent,
-  type RefundEvent,
 } from "./types";
 import type { RegistryClient } from "./registry-client";
 import { createHandler } from "./handlers";
 import { createHonoApp } from "./hono-adapter";
-
-type SettlementHandler = (event: SettlementEvent) => Promise<void> | void;
-type DisputeHandler = (event: DisputeEvent) => Promise<void> | void;
-type RefundHandler = (event: RefundEvent) => Promise<void> | void;
+import { SessionManager, InMemorySessionStore } from "./session";
+import { ReceiptGenerator } from "./receipt";
+import { WebhookEmitter } from "./webhook";
+import type { SettlementHandler, DisputeHandler, RefundHandler } from "./webhook";
 
 /**
  * Core SDK class for mounting governed agent transaction endpoints.
@@ -22,11 +19,11 @@ type RefundHandler = (event: RefundEvent) => Promise<void> | void;
  */
 export class WarrantedSDK {
   public readonly config: WarrantedSDKConfig;
+  public readonly sessionManager: SessionManager;
+  public readonly receiptGenerator: ReceiptGenerator;
+  public readonly webhookEmitter: WebhookEmitter;
 
   private handler: (request: Request) => Promise<Response>;
-  private settlementHandlers: SettlementHandler[] = [];
-  private disputeHandlers: DisputeHandler[] = [];
-  private refundHandlers: RefundHandler[] = [];
 
   constructor(raw: unknown, registryClient?: RegistryClient) {
     const result = WarrantedSDKConfigSchema.safeParse(raw);
@@ -37,7 +34,23 @@ export class WarrantedSDK {
       throw new Error(`Invalid WarrantedSDK config: ${issues}`);
     }
     this.config = result.data;
-    this.handler = createHandler(this.config, registryClient);
+
+    const sessionStore = new InMemorySessionStore();
+    this.sessionManager = new SessionManager(
+      sessionStore,
+      this.config.catalog ?? [],
+      this.config.sessionTtlSeconds
+    );
+    this.receiptGenerator = new ReceiptGenerator(this.config.registryUrl);
+    this.webhookEmitter = new WebhookEmitter();
+
+    this.handler = createHandler(
+      this.config,
+      registryClient,
+      this.sessionManager,
+      this.receiptGenerator,
+      this.webhookEmitter
+    );
   }
 
   /**
@@ -58,16 +71,16 @@ export class WarrantedSDK {
 
   /** Register a callback for settlement events. */
   onSettlement(handler: SettlementHandler): void {
-    this.settlementHandlers.push(handler);
+    this.webhookEmitter.onSettlement(handler);
   }
 
   /** Register a callback for dispute events. */
   onDispute(handler: DisputeHandler): void {
-    this.disputeHandlers.push(handler);
+    this.webhookEmitter.onDispute(handler);
   }
 
   /** Register a callback for refund events. */
   onRefund(handler: RefundHandler): void {
-    this.refundHandlers.push(handler);
+    this.webhookEmitter.onRefund(handler);
   }
 }
