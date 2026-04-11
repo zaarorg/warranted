@@ -1,0 +1,11 @@
+:80 {
+  handle /api/* {
+    reverse_proxy api:3000
+  }
+  handle /health {
+    reverse_proxy api:3000
+  }
+  handle {
+    reverse_proxy dashboard:3001
+  }
+}
