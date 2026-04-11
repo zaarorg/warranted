@@ -62,9 +62,12 @@ uvicorn==0.41.0
 cryptography==46.0.7
 inter-agent-trust-protocol==0.5.0
 agent-os-kernel==3.0.1
+agentmesh-runtime==3.0.2
 PyJWT==2.10.1
 httpx==0.28.1
 ```
+
+**Note:** Verify the exact versions and import usage by running `pip show <package>` in the current sidecar venv before pinning. The `agentmesh-runtime` package is listed in the original `requirements.txt` and may be imported by `server.py`. If `server.py` does not import from it, remove it.
 
 **`sidecar/requirements-lock.txt`** — generated via `pip-compile requirements.txt`. Full transitive dependency tree for reproducible Docker builds. The Dockerfile installs from this lockfile.
 
@@ -74,6 +77,7 @@ Before writing any Caddyfile or proxy config, verify:
 1. `apps/api/src/index.ts` route mount paths (confirmed: `app.route("/api/policies", ...)`, `app.get("/health", ...)`)
 2. `apps/dashboard/src/lib/api.ts` fetch paths match the API routes
 3. Confirm the Caddy/nginx reverse proxy config will route correctly
+4. The API health check at `/health` conflicts with the Caddy catch-all route to the dashboard. Either move the health check to `/api/health` (code change in `apps/api/src/index.ts`) or add an explicit `/health` rule in the Caddyfile. The spec's Caddyfile includes the explicit rule, but moving to `/api/health` is cleaner long-term.
 
 ---
 
@@ -155,11 +159,12 @@ RUN adduser --system --no-create-home sidecar
 
 WORKDIR /app
 
-COPY requirements-lock.txt .
+COPY sidecar/requirements-lock.txt ./requirements-lock.txt
 RUN pip install --no-cache-dir -r requirements-lock.txt
 
-COPY __init__.py .
-COPY server.py .
+# Preserve Python package structure for sidecar.server:app
+COPY sidecar/__init__.py sidecar/__init__.py
+COPY sidecar/server.py sidecar/server.py
 
 USER sidecar
 
@@ -169,8 +174,10 @@ ENV PORT=8100
 
 EXPOSE ${PORT}
 
-CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "uvicorn sidecar.server:app --host 0.0.0.0 --port ${PORT}"]
 ```
+
+**Build context:** Repository root (COPY paths are relative to root). The sidecar package structure is preserved inside the image so `uvicorn sidecar.server:app` resolves correctly.
 
 **Note:** Explicit COPY of only the files needed. No `.dockerignore` — if a file is added to the sidecar, the developer consciously decides whether the Docker image needs it. Non-root user for security.
 
@@ -246,7 +253,9 @@ bun run apps/api/src/index.ts
 
 **`apps/api/src/migrate.ts`** — runs Drizzle `migrate()` with committed SQL migration files from `drizzle/migrations/`. Migrations are generated via `drizzle-kit generate`, committed to the repo, and are deterministic and reviewable in PRs.
 
-**`apps/api/src/seed-db.ts`** — calls `seed(db)` from the rules engine package. Idempotent (checks if data already exists before inserting).
+**Prerequisite:** The `drizzle/migrations/` directory must exist with generated SQL files before the Docker image is built. Run `bunx drizzle-kit generate` locally, commit the output, then build the image. The API Dockerfile COPYs this directory into the image at build time — if it doesn't exist, the Docker build fails.
+
+**`apps/api/src/seed-db.ts`** — calls `seed(db)` from the rules engine package. Idempotent via `INSERT ... ON CONFLICT DO NOTHING` for all seed inserts. The current `seed()` function from Phase 2 uses `db.insert().values()` which throws on duplicate primary keys — `seed-db.ts` must wrap seed inserts with `.onConflictDoNothing()` (Drizzle syntax) or use a check-before-insert pattern. This is a Phase 0/1 code change: either modify the existing `seed()` function to accept an `{ onConflict: "ignore" }` option, or write `seed-db.ts` as a wrapper that catches constraint violations gracefully.
 
 **Configuration (env vars):**
 
@@ -263,12 +272,13 @@ bun run apps/api/src/index.ts
 
 ```dockerfile
 # Base image pinned to minor. Review quarterly or on security advisory. Last reviewed: 2026-04.
-FROM node:20-alpine AS builder
+FROM oven/bun:1.3 AS builder
 
 WORKDIR /app
 COPY apps/dashboard/ .
-RUN npm ci
-RUN NEXT_PUBLIC_API_URL="__NEXT_PUBLIC_API_URL_PLACEHOLDER__" npm run build
+COPY apps/dashboard/bun.lock ./bun.lock
+RUN bun install --frozen-lockfile
+RUN NEXT_PUBLIC_API_URL="__NEXT_PUBLIC_API_URL_PLACEHOLDER__" bun run build
 
 FROM node:20-alpine AS runner
 WORKDIR /app
@@ -284,6 +294,8 @@ ENV PORT=3001
 EXPOSE ${PORT}
 ENTRYPOINT ["./entrypoint.sh"]
 ```
+
+**Build context:** Repository root (COPY paths are relative to root, same as the API Dockerfile). The builder stage uses `oven/bun:1.3` to match the project's package manager (`bun.lock`, not `package-lock.json`). The runner stage uses `node:20-alpine` for the smallest possible production image.
 
 **Runtime env injection (`apps/dashboard/scripts/entrypoint.sh`):**
 
@@ -483,7 +495,7 @@ services:
       DATABASE_URL: postgresql://warranted:${POSTGRES_PASSWORD}@postgres:5432/warranted
       PORT: "3000"
     ports:
-      - "3000:3000"
+      - "3000:3000"  # Remove in production when using Caddy proxy profile
     depends_on:
       postgres:
         condition: service_healthy
@@ -535,6 +547,19 @@ volumes:
 
 **Image versioning:** Variables with defaults (`${API_VERSION:-0.1.0}`). Works out of the box for evaluation, overridable for CD pipelines via `.env` or environment variables.
 
+**`.env.example`** — committed to the repo, documents all required and optional variables:
+```env
+# Required
+POSTGRES_PASSWORD=change-me-in-production
+ED25519_SEED=change-me-unique-per-agent
+
+# Optional (defaults shown)
+API_VERSION=0.1.0
+SIDECAR_VERSION=0.1.0
+DASHBOARD_VERSION=0.1.0
+```
+Without this file, `docker compose -f docker-compose.production.yml up` fails with undefined variable errors. Operators copy to `.env` and fill in values.
+
 **Reverse proxy:** Caddy is included as an optional Compose profile. `docker compose up` starts application services only. `docker compose --profile proxy up` includes Caddy.
 
 ### Proxy Configuration
@@ -545,11 +570,16 @@ volumes:
   handle /api/* {
     reverse_proxy api:3000
   }
+  handle /health {
+    reverse_proxy api:3000
+  }
   handle {
     reverse_proxy dashboard:3001
   }
 }
 ```
+
+**Note:** The API health check endpoint must be at `/health` (not `/api/health`). The Caddyfile includes an explicit `/health` route to the API to avoid it being caught by the dashboard catch-all. Alternatively, the API health check can be moved to `/api/health` as a Phase 0 code change — if so, remove the `/health` Caddy rule.
 
 **`docs/proxy/nginx.conf`:** provided as an alternative for operators using nginx.
 
@@ -588,8 +618,8 @@ services:
 
   sidecar:
     build:
-      context: ./sidecar
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: sidecar/Dockerfile
     environment:
       ED25519_SEED: demo-seed-123
       RULES_ENGINE_URL: http://api:3000/api/policies/check
@@ -767,10 +797,11 @@ Runs the full flow: discover manifest → browse catalog → create session → 
 |---|---|---|---|
 | 1 | Dashboard relative URLs + rewrites + standalone output | Code | 0 |
 | 2 | Sidecar `__init__.py` + pinned deps + lockfile | Code | 0 |
-| 3 | Route path verification | Verification | 0 |
+| 3 | Route path verification (including health check route) | Verification | 0 |
+| 3a | Seed function idempotency (`.onConflictDoNothing()` or wrapper) | Code | 0 |
 | 4 | `sidecar/Dockerfile` | Docker | 1 |
 | 5 | `apps/api/Dockerfile` + `start.sh` + `migrate.ts` | Docker | 1 |
-| 6 | `drizzle/migrations/` (generated SQL) | Migrations | 1 |
+| 6 | `drizzle/migrations/` (generated SQL — must be committed before Docker build) | Migrations | 1 |
 | 7 | `apps/dashboard/Dockerfile` + `entrypoint.sh` | Docker | 1 |
 | 8 | `tsconfig.build.json` for both packages | Build | 1 |
 | 9 | `package.json` publishConfig for both packages | Config | 1 |
@@ -789,8 +820,9 @@ Runs the full flow: discover manifest → browse catalog → create session → 
 | 22 | `examples/openclaw/` (moved demo material) | Reorg | 4 |
 | 23 | `docker-compose.production.yml` | Docker | 4 |
 | 24 | `docker-compose.demo.yml` | Docker | 4 |
-| 25 | Root `README.md` | Docs | 4 |
-| 26 | `scripts/verify-packaging.sh` | Script | 4 |
+| 25 | `.env.example` | Config | 4 |
+| 26 | Root `README.md` | Docs | 4 |
+| 27 | `scripts/verify-packaging.sh` | Script | 4 |
 
 ---
 
