@@ -1,0 +1,72 @@
+networks:
+  backend:
+    driver: bridge
+  frontend:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:16
+    networks: [backend]
+    environment:
+      POSTGRES_USER: warranted
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: warranted
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U warranted"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    image: warranted/rules-engine-api:${API_VERSION:-0.1.0}
+    networks: [backend, frontend]
+    environment:
+      DATABASE_URL: postgresql://warranted:${POSTGRES_PASSWORD}@postgres:5432/warranted
+      PORT: "3000"
+    ports:
+      - "3000:3000"  # Remove in production when using Caddy proxy profile
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  sidecar:
+    image: warranted/governance-sidecar:${SIDECAR_VERSION:-0.1.0}
+    networks: [backend]  # NOT on frontend — never exposed to public internet
+    environment:
+      ED25519_SEED: ${ED25519_SEED}
+      RULES_ENGINE_URL: http://api:3000/api/policies/check
+      PORT: "8100"
+    depends_on:
+      - api
+
+  dashboard:
+    image: warranted/dashboard:${DASHBOARD_VERSION:-0.1.0}
+    networks: [frontend]
+    environment:
+      NEXT_PUBLIC_API_URL: ""  # empty = relative URLs, requires reverse proxy
+      PORT: "3001"
+    ports:
+      - "3001:3001"
+    depends_on:
+      - api
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: [proxy]  # only with: docker compose --profile proxy up
+    networks: [frontend]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docs/proxy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    depends_on:
+      - api
+      - dashboard
+
+volumes:
+  postgres_data:
+  caddy_data:
