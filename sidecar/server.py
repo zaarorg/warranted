@@ -100,6 +100,32 @@ def _verify(payload_bytes: bytes, signature_b64: str) -> bool:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+PLATFORM_TEAM_GROUP_ID = "00000000-0000-0000-0000-000000000021"
+
+
+@app.on_event("startup")
+async def register_agent_in_rules_engine():
+    """Register this agent's DID in the rules engine Platform team on startup."""
+    if not RULES_ENGINE_URL:
+        return
+    base_url = RULES_ENGINE_URL.rsplit("/check", 1)[0]
+    members_url = f"{base_url}/groups/{PLATFORM_TEAM_GROUP_ID}/members"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                members_url,
+                json={"agentDid": AGENT_DID},
+            )
+            if resp.status_code in (200, 201):
+                logger.info(f"Registered agent {AGENT_DID} in Platform team")
+            elif resp.status_code == 409:
+                logger.info(f"Agent {AGENT_DID} already registered in Platform team")
+            else:
+                logger.warning(f"Agent registration returned {resp.status_code}: {resp.text}")
+    except Exception as e:
+        logger.warning(f"Could not register agent in rules engine: {e}")
+
+
 @app.get("/favicon.ico")
 async def favicon():
     return Response(status_code=204)
@@ -116,6 +142,7 @@ async def root():
             "/sign_transaction",
             "/verify_signature",
             "/issue_token",
+            "/my_policies",
         ],
     }
 
@@ -248,6 +275,53 @@ async def verify_signature(payload: str, signature: str):
         "public_key": PUBLIC_KEY_B64,
         "algorithm": "Ed25519",
     }
+
+
+@app.get("/my_policies")
+async def my_policies():
+    """Return the resolved policy envelope for this agent from the rules engine."""
+    if not RULES_ENGINE_URL:
+        return {
+            "source": "local",
+            "agent_did": AGENT_DID,
+            "policies": {
+                "spending_limit": SPENDING_LIMIT,
+                "approved_vendors": APPROVED_VENDORS,
+                "permitted_categories": PERMITTED_CATEGORIES,
+            },
+        }
+
+    # The rules engine URL points to /api/policies/check — derive base URL
+    base_url = RULES_ENGINE_URL.rsplit("/check", 1)[0]
+    envelope_url = f"{base_url}/agents/{AGENT_DID}/envelope"
+    policies_url = f"{base_url}/agents/{AGENT_DID}/policies"
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            envelope_resp = await client.get(envelope_url)
+            policies_resp = await client.get(policies_url)
+
+        envelope = envelope_resp.json().get("data", {})
+        policy_list = policies_resp.json().get("data", [])
+
+        return {
+            "source": "rules-engine",
+            "agent_did": AGENT_DID,
+            "envelope": envelope,
+            "policies": policy_list,
+        }
+    except Exception as e:
+        logger.warning(f"Failed to fetch policies from rules engine: {e}")
+        return {
+            "source": "local-fallback",
+            "agent_did": AGENT_DID,
+            "error": str(e),
+            "policies": {
+                "spending_limit": SPENDING_LIMIT,
+                "approved_vendors": APPROVED_VENDORS,
+                "permitted_categories": PERMITTED_CATEGORIES,
+            },
+        }
 
 
 @app.post("/issue_token")

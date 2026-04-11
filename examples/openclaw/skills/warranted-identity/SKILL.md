@@ -31,6 +31,15 @@ Returns your agent ID, DID, spending limit, and approved vendors.
 curl -s http://warranted-sidecar:8100/check_identity
 ```
 
+### View your governance policies
+
+Returns all policies that apply to this agent, including the resolved
+envelope (effective constraints per action type) and assigned policies.
+
+```bash
+curl -s http://warranted-sidecar:8100/my_policies
+```
+
 ### Check if a purchase is authorized
 
 Returns whether the transaction is authorized and why.
