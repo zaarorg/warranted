@@ -21,8 +21,8 @@ RUN NEXT_PUBLIC_API_URL="__NEXT_PUBLIC_API_URL_PLACEHOLDER__" bun run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 COPY --from=builder /app/apps/dashboard/.next/standalone ./
-COPY --from=builder /app/apps/dashboard/.next/static ./.next/static
-COPY --from=builder /app/apps/dashboard/public ./public
+COPY --from=builder /app/apps/dashboard/.next/static ./apps/dashboard/.next/static
+COPY --from=builder /app/apps/dashboard/public ./apps/dashboard/public
 COPY apps/dashboard/scripts/entrypoint.sh ./entrypoint.sh
 RUN chmod +x entrypoint.sh
 
