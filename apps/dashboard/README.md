@@ -1,36 +1,119 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Warranted Dashboard
 
-## Getting Started
+> **v0.1 — API may change.** Core exports are stable but details may shift before v1.0.
 
-First, run the development server:
+Admin dashboard for AI agent policy management. Visualize agent envelopes with full inheritance chains, test authorization decisions via the REPL, inspect Cedar source, and manage group hierarchies.
+
+## Quick Start
+
+### Deploy to Vercel
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd apps/dashboard
+npx vercel --env NEXT_PUBLIC_API_URL=https://your-api.example.com
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Docker
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+docker run -p 3001:3001 warranted/dashboard
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Requires a reverse proxy routing `/api/*` to the rules engine API.
 
-## Learn More
+### Local Development
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+cd apps/dashboard
+bun install
+bun run dev
+# Dashboard: http://localhost:3001
+# Requires API running on http://localhost:3000
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Configuration
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `NEXT_PUBLIC_API_URL` | No | `""` (relative) | API URL. Empty = relative paths (needs reverse proxy). |
+| `PORT` | No | `3001` | Port the dashboard listens on |
 
-## Deploy on Vercel
+## Reverse Proxy
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The dashboard makes client-side requests to `/api/*`. In production, a reverse proxy must route these to the rules engine API.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Caddyfile
+
+```
+:80 {
+  handle /api/* {
+    reverse_proxy api:3000
+  }
+  handle /health {
+    reverse_proxy api:3000
+  }
+  handle {
+    reverse_proxy dashboard:3001
+  }
+}
+```
+
+### nginx
+
+```nginx
+server {
+    listen 80;
+
+    location /api/ {
+        proxy_pass http://api:3000;
+    }
+
+    location /health {
+        proxy_pass http://api:3000;
+    }
+
+    location / {
+        proxy_pass http://dashboard:3001;
+    }
+}
+```
+
+### Cross-Origin
+
+For deployments where the API and dashboard are on different domains, set `NEXT_PUBLIC_API_URL` to the full API URL (e.g., `https://api.warranted.example.com`).
+
+## Pages
+
+### Policies
+
+Searchable policy table with filtering. Click a policy to see:
+- **Constraints** tab — dimension constraints per action type
+- **Cedar** tab — generated Cedar source code
+- **History** tab — version history with diffs
+
+### Agents
+
+Agent list with envelope visualization. Click an agent to see:
+- Resolved envelope with full inheritance chain
+- Per-action dimensions showing which group contributed each constraint
+- Authorization REPL — test decisions by entering vendor, amount, and category
+
+### Groups
+
+Tree view of the organizational hierarchy. Click a group to see:
+- Group members (agents)
+- Assigned policies
+- Ancestor and descendant chains
+
+### Petitions
+
+Coming soon — self-service policy exception requests.
+
+<!-- TODO: Add screenshot — policies list page -->
+<!-- TODO: Add screenshot — agent envelope with inheritance chain -->
+<!-- TODO: Add screenshot — REPL tester showing Allow result -->
+<!-- TODO: Add screenshot — Cedar source viewer -->
+
+## License
+
+Apache-2.0
