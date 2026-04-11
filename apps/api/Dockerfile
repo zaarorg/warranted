@@ -6,7 +6,9 @@ WORKDIR /app
 # Copy workspace package files for dependency install
 COPY package.json bun.lock ./
 COPY packages/rules-engine/package.json packages/rules-engine/
+COPY packages/storefront-sdk/package.json packages/storefront-sdk/
 COPY apps/api/package.json apps/api/
+COPY apps/dashboard/package.json apps/dashboard/
 
 RUN bun install --frozen-lockfile
 
