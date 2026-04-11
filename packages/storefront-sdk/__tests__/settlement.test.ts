@@ -139,7 +139,7 @@ describe("settlement flow", () => {
     );
 
     expect(handler).toHaveBeenCalledOnce();
-    const event = handler.mock.calls[0][0];
+    const event = handler.mock.calls[0]![0];
     expect(event.sessionId).toBe(session.sessionId);
     expect(event.agentDid).toBe(
       "did:mesh:8ae56e6f93037f8ab8adefd7ee076e66bc3c98c6"

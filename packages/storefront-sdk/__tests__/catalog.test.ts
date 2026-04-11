@@ -39,7 +39,7 @@ describe("createCatalogResponse", () => {
     });
 
     expect(response.items).toHaveLength(1);
-    expect(response.items[0].sku).toBe("gpu-hours-100");
+    expect(response.items[0]!.sku).toBe("gpu-hours-100");
   });
 
   it("filters out unavailable items", () => {
@@ -100,7 +100,7 @@ describe("createCatalogResponse", () => {
       ...BASE_CONFIG,
       catalog: [itemWithMeta],
     });
-    expect(response.items[0].metadata).toEqual({
+    expect(response.items[0]!.metadata).toEqual({
       gpu_type: "A100",
       region: "us-east-1",
     });

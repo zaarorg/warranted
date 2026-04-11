@@ -12,6 +12,10 @@ const CONFIG: WarrantedSDKConfig = {
   registryUrl: "http://localhost:8100",
   webhookSecret: "whsec_demo",
   minTrustScore: 0,
+  acceptedPayment: ["warranted-credits"],
+  supportedTransactionTypes: ["fixed-price"],
+  jurisdiction: "US",
+  sessionTtlSeconds: 3600,
   catalog: [
     {
       sku: "gpu-hours-100",
