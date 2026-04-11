@@ -46,6 +46,6 @@ services:
       - .:/app
     command: bun run examples/openclaw/scripts/demo-vendor-server.ts
     ports:
-      - "3001:3001"
+      - "3002:3001"
     depends_on:
       - sidecar
