@@ -279,36 +279,75 @@ async def verify_signature(payload: str, signature: str):
 
 @app.get("/my_policies")
 async def my_policies():
-    """Return the resolved policy envelope for this agent from the rules engine."""
+    """Return all Cedar policies governing this agent from the rules engine."""
     if not RULES_ENGINE_URL:
         return {
             "source": "local",
             "agent_did": AGENT_DID,
-            "policies": {
-                "spending_limit": SPENDING_LIMIT,
-                "approved_vendors": APPROVED_VENDORS,
-                "permitted_categories": PERMITTED_CATEGORIES,
-            },
+            "cedar_policies": [],
+            "note": "Rules engine not configured — no Cedar policies available",
         }
 
-    # The rules engine URL points to /api/policies/check — derive base URL
     base_url = RULES_ENGINE_URL.rsplit("/check", 1)[0]
-    envelope_url = f"{base_url}/agents/{AGENT_DID}/envelope"
-    policies_url = f"{base_url}/agents/{AGENT_DID}/policies"
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            envelope_resp = await client.get(envelope_url)
-            policies_resp = await client.get(policies_url)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # 1. Find which groups this agent belongs to
+            members_resp = await client.get(
+                f"{base_url}/groups/{PLATFORM_TEAM_GROUP_ID}/members"
+            )
+            # 2. Walk ancestors to get full group hierarchy
+            ancestors_resp = await client.get(
+                f"{base_url}/groups/{PLATFORM_TEAM_GROUP_ID}/ancestors"
+            )
+            ancestor_groups = ancestors_resp.json().get("data", [])
+            group_ids = [g["id"] for g in ancestor_groups]
 
-        envelope = envelope_resp.json().get("data", {})
-        policy_list = policies_resp.json().get("data", [])
+            # 3. Collect policy assignments from all groups in the hierarchy
+            seen_policy_ids = set()
+            for gid in group_ids:
+                assignments_resp = await client.get(
+                    f"{base_url}/assignments", params={"groupId": gid}
+                )
+                for a in assignments_resp.json().get("data", []):
+                    seen_policy_ids.add(a["policyId"])
+
+            # Also check direct agent assignments
+            agent_assignments_resp = await client.get(
+                f"{base_url}/assignments", params={"agentDid": AGENT_DID}
+            )
+            for a in agent_assignments_resp.json().get("data", []):
+                seen_policy_ids.add(a["policyId"])
+
+            # 4. Fetch each policy with its active version Cedar source
+            cedar_policies = []
+            for pid in seen_policy_ids:
+                policy_resp = await client.get(f"{base_url}/rules/{pid}")
+                policy = policy_resp.json().get("data", {})
+                if not policy.get("activeVersionId"):
+                    continue
+
+                versions_resp = await client.get(f"{base_url}/rules/{pid}/versions")
+                versions = versions_resp.json().get("data", [])
+                active = next(
+                    (v for v in versions if v["id"] == policy["activeVersionId"]),
+                    None,
+                )
+                if active and active.get("cedarSource"):
+                    cedar_policies.append({
+                        "name": policy["name"],
+                        "domain": policy["domain"],
+                        "effect": policy["effect"],
+                        "version": active.get("versionNumber", 1),
+                        "cedar_source": active["cedarSource"],
+                        "cedar_hash": active.get("cedarHash", ""),
+                    })
 
         return {
             "source": "rules-engine",
             "agent_did": AGENT_DID,
-            "envelope": envelope,
-            "policies": policy_list,
+            "policy_count": len(cedar_policies),
+            "cedar_policies": cedar_policies,
         }
     except Exception as e:
         logger.warning(f"Failed to fetch policies from rules engine: {e}")
@@ -316,11 +355,7 @@ async def my_policies():
             "source": "local-fallback",
             "agent_did": AGENT_DID,
             "error": str(e),
-            "policies": {
-                "spending_limit": SPENDING_LIMIT,
-                "approved_vendors": APPROVED_VENDORS,
-                "permitted_categories": PERMITTED_CATEGORIES,
-            },
+            "cedar_policies": [],
         }
 
 
