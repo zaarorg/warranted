@@ -36,7 +36,8 @@ describe("cedar generation", () => {
     expect(cedar).toContain("permit (");
     expect(cedar).toContain(`principal in ${orgTarget}`);
     expect(cedar).toContain('action == Action::"purchase.initiate"');
-    expect(cedar).toContain("context.amount <= 5000");
+    // Conjunctive semantics: permit + forbid when violated
+    expect(cedar).toContain("context.amount > 5000");
   });
 
   it("generates forbid block for deny policies", () => {
@@ -67,7 +68,7 @@ describe("cedar generation", () => {
     expect(cedar).toContain(`// Assigned to: ${orgTarget}`);
   });
 
-  it("handles numeric dimension: context.amount <= N", () => {
+  it("handles numeric dimension: forbid when context.amount > N", () => {
     const constraints: PolicyConstraint[] = [
       {
         actionTypeId: purchaseActionId,
@@ -77,7 +78,7 @@ describe("cedar generation", () => {
     ];
 
     const cedar = generateCedar("test", 1, "allow", constraints, orgTarget);
-    expect(cedar).toContain("context.amount <= 5000");
+    expect(cedar).toContain("context.amount > 5000");
   });
 
   it("handles set dimension: [context.vendor].containsAny([...])", () => {
@@ -107,7 +108,8 @@ describe("cedar generation", () => {
     ];
 
     const cedar = generateCedar("test", 1, "allow", constraints, orgTarget);
-    expect(cedar).toContain("context.requires_human_approval == true");
+    // Conjunctive semantics: forbid when value != expected
+    expect(cedar).toContain("context.requires_human_approval != true");
   });
 
   it("handles temporal dimension: skipped in Cedar (checked at resolution time)", () => {
@@ -136,7 +138,8 @@ describe("cedar generation", () => {
     ];
 
     const cedar = generateCedar("test", 1, "allow", constraints, orgTarget);
-    expect(cedar).toContain("context.transactions_last_hour <= 10");
+    // Conjunctive semantics: forbid when rate exceeded
+    expect(cedar).toContain("context.transactions_last_hour > 10");
   });
 
   it("handles rate dimension with day window", () => {
@@ -149,7 +152,8 @@ describe("cedar generation", () => {
     ];
 
     const cedar = generateCedar("test", 1, "allow", constraints, orgTarget);
-    expect(cedar).toContain("context.transactions_last_day <= 50");
+    // Conjunctive semantics: forbid when rate exceeded
+    expect(cedar).toContain("context.transactions_last_day > 50");
   });
 
   it("handles policy with no dimensions (unconditional)", () => {
@@ -165,7 +169,7 @@ describe("cedar generation", () => {
     expect(cedar).toContain("permit (");
     expect(cedar).not.toContain("when {");
     // Should end with just semicolon
-    expect(cedar).toMatch(/resource\n\)\n;$/);
+    expect(cedar).toMatch(/resource\n\);$/);
   });
 
   it("handles policy with only temporal dimensions (no when clause)", () => {
