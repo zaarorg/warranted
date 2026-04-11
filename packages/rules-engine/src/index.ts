@@ -90,6 +90,10 @@ export { generateCedar } from "./cedar-gen";
 export { NoOpEnvelopeCache } from "./cache";
 export type { EnvelopeCache, CachedEnvelopeEntry } from "./cache";
 
+// Petition data model
+export { PetitionCreateSchema, PetitionDecideSchema, PetitionResponseShape } from "./petition";
+export type { PetitionCreate, PetitionDecide } from "./petition";
+
 // Seed data
 export {
   seed,

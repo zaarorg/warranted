@@ -1,0 +1,24 @@
+{
+  "name": "@warranted/api",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "start": "bun run src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@warranted/rules-engine": "workspace:*",
+    "drizzle-orm": "^0.40.1",
+    "hono": "^4.12.12",
+    "postgres": "^3.4.9",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.1",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.1"
+  }
+}
