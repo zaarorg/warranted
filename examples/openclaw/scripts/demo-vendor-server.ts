@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { WarrantedSDK } from "../packages/storefront-sdk/src/index";
+import { WarrantedSDK } from "../../../packages/storefront-sdk/src/index";
 
 const sidecarUrl = process.env.SIDECAR_URL || "http://localhost:8100";
 const port = Number(process.env.PORT) || 3001;
