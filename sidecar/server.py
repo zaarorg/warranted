@@ -4,6 +4,7 @@ import logging
 import os
 import time
 import base64
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 
@@ -59,7 +60,12 @@ _score = reputation_mgr.get_or_create_score(AGENT_ID)
 reputation_mgr.record_success(AGENT_ID, trace_id="boot")
 
 # ---------------------------------------------------------------------------
-# Spending policy (unchanged)
+# Rules engine proxy (Phase 4)
+# ---------------------------------------------------------------------------
+RULES_ENGINE_URL = os.environ.get("RULES_ENGINE_URL", "")
+
+# ---------------------------------------------------------------------------
+# Spending policy (fallback when rules engine is not configured)
 # ---------------------------------------------------------------------------
 SPENDING_LIMIT = 5000
 APPROVED_VENDORS = ["aws", "azure", "gcp", "github", "vercel", "railway", "vendor-acme-001"]
@@ -134,6 +140,50 @@ async def check_identity():
 
 @app.post("/check_authorization")
 async def check_authorization(vendor: str, amount: float, category: str):
+    score = reputation_mgr.get_or_create_score(AGENT_ID)
+    trust_level = reputation_mgr.get_trust_level(AGENT_ID)
+
+    # Proxy to rules engine when configured
+    if RULES_ENGINE_URL:
+        try:
+            check_request = {
+                "principal": f'Agent::"{AGENT_DID}"',
+                "action": 'Action::"purchase.initiate"',
+                "resource": f'Resource::"{vendor}"',
+                "context": {
+                    "amount": amount,
+                    "vendor": vendor,
+                    "category": category,
+                },
+            }
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    RULES_ENGINE_URL,
+                    json=check_request,
+                )
+                result = response.json()
+
+            authorized = result.get("decision") == "Allow"
+            diagnostics = result.get("diagnostics", [])
+            reasons = diagnostics if not authorized and diagnostics else (["within policy"] if authorized else ["policy denied"])
+            requires_approval = result.get("details", {}).get("requires_human_approval", False)
+
+            return {
+                "authorized": authorized,
+                "reasons": reasons,
+                "requires_approval": requires_approval,
+                "agent_id": AGENT_ID,
+                "did": AGENT_DID,
+                "trust_score": score.score,
+                "trust_level": trust_level.value,
+                "vendor": vendor,
+                "amount": amount,
+                "category": category,
+            }
+        except Exception as e:
+            logger.warning(f"Rules engine proxy failed, falling back to local checks: {e}")
+
+    # Fallback to hardcoded checks (existing behavior)
     reasons = []
     if amount > SPENDING_LIMIT:
         reasons.append(f"Amount ${amount} exceeds limit of ${SPENDING_LIMIT}")
@@ -141,9 +191,6 @@ async def check_authorization(vendor: str, amount: float, category: str):
         reasons.append(f"Vendor '{vendor}' not on approved list")
     if category not in PERMITTED_CATEGORIES:
         reasons.append(f"Category '{category}' not authorized")
-
-    score = reputation_mgr.get_or_create_score(AGENT_ID)
-    trust_level = reputation_mgr.get_trust_level(AGENT_ID)
 
     return {
         "authorized": len(reasons) == 0,

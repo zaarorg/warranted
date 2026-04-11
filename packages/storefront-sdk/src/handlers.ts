@@ -174,7 +174,7 @@ async function handleCreateSession(
       return sum + (catalogItem?.price ?? 0) * item.quantity;
     }, 0);
 
-    const authResult = verifyAuthorization(
+    const authResult = await verifyAuthorization(
       agentContext,
       {
         amount: totalAmount,

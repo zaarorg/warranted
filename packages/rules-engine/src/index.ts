@@ -86,6 +86,10 @@ export { buildEntityStore, rebuildOnVersionBump } from "./entity-store";
 // Cedar source generation
 export { generateCedar } from "./cedar-gen";
 
+// Envelope cache
+export { NoOpEnvelopeCache } from "./cache";
+export type { EnvelopeCache, CachedEnvelopeEntry } from "./cache";
+
 // Seed data
 export {
   seed,
