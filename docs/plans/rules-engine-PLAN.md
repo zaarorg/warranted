@@ -44,7 +44,7 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
 
 ### Q: Should the envelope cache use TTL or invalidation?
 **Tradeoff:** No cache (always recompute) vs. TTL-based (simple, stale window) vs. invalidation-based (correct, complex).
-**Decision:** Cache with invalidation. Hybrid mechanism: a global `policyVersion` counter on the `organizations` table for in-process staleness checks, plus Postgres `LISTEN/NOTIFY` for cross-process invalidation in multi-instance deployments. When a policy assignment changes on a group, all agents in that group and descendant groups are invalidated via recursive CTE.
+**Decision:** Interface only with no-op default. The spec defines the `EnvelopeCache` interface but defers caching strategy to a future optimization phase. The default `NoOpEnvelopeCache` always recomputes (no caching). Envelope resolution is fast (a few DB queries + intersection logic). When caching becomes necessary, the `organizations.policyVersion` counter provides the staleness signal.
 
 ### Q: Who provides runtime state for stateful rules (daily spend, rate limits)?
 **Tradeoff:** Rules engine queries the ledger internally (smart engine, I/O) vs. sidecar maintains accumulators (status quo) vs. caller provides context (pure engine, no I/O).
@@ -56,11 +56,11 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
 
 ### Q: Should the spec include petitioning (one-time exception requests)?
 **Tradeoff:** Full design (core governance differentiator) vs. API stubs only (schema ready, code later) vs. out of scope.
-**Decision:** Full design. Petitions route to the lowest authority in the group hierarchy whose envelope would permit the requested exception. Approved petitions temporarily widen a dimension for that agent with an expiry. The full workflow — request, routing, approval, expiry, envelope integration — is in scope.
+**Decision:** API stubs only. The spec defines the petition data model, API endpoints, and routing algorithm, but implementation is deferred post-demo. Phase 5 delivers endpoint stubs that return `501 Not Implemented` with the correct response shapes. The full workflow — routing, approval, expiry, envelope integration — is documented for future implementation.
 
 ### Q: What auth model for the management API?
 **Tradeoff:** Platform JWT with admin role (simple, shared auth) vs. API keys (no JWT complexity) vs. entity-scoped JWT (org-level isolation, maps to authority chain) vs. internal-only/network auth.
-**Decision:** Entity-scoped JWT. Management endpoints require a JWT with an `orgId` claim matching the resources being modified and an `admin` or `policy-admin` role. A CFO's token can modify policies for their org only.
+**Decision:** Internal-only for now. Management endpoints are accessible only within the Docker network. No application-level authentication required. Entity-scoped JWT auth is deferred to a future phase when the API is exposed externally.
 
 ### Q: How should policy mutations (version create, Cedar gen, entity rebuild, cache invalidation) be coordinated?
 **Tradeoff:** Atomic in a DB transaction (correct, synchronous) vs. eventual consistency with version fence (async, no partial reads) vs. async with staleness window (fast, brief inconsistency).
@@ -80,7 +80,7 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
 
 ### Q: Should temporal dimensions (time-of-day windows, expiry dates) be supported?
 **Tradeoff:** Full temporal support (windows + expiry + tightest-window resolution) vs. expiry only (simpler) vs. out of scope.
-**Decision:** Full temporal support. Time-of-day windows (9-17 for business hours), date expiry (policy expires end of quarter), and tightest-window resolution (org 9-17 + team 9-12 → 9-12). Useful for "no purchases after hours" and temporal budget policies.
+**Decision:** Expiry only. Support policy expiry dates (`temporalExpiry`) but not time-of-day windows. Earliest expiry across all sources wins (narrowing). Time-of-day windows deferred — nobody is blocking procurement because it's 6pm.
 
 ---
 
@@ -99,10 +99,10 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
   - `groups` (id, orgId, name, nodeType, parentId self-ref FK, createdAt) — adjacency list, no ltree
   - `agentGroupMemberships` (agentDid TEXT, groupId FK) — references registry agents by DID
   - `actionTypes` (id, domain enum, name, description) — 14 action types
-  - `dimensionDefinitions` (id, actionTypeId FK, dimensionName, kind enum, numericMax, rateLimit, rateWindow, setMembers, boolDefault, temporalStart, temporalEnd, temporalExpiry)
+  - `dimensionDefinitions` (id, actionTypeId FK, dimensionName, kind enum, numericMax, rateLimit, rateWindow, setMembers, boolDefault, boolRestrictive, temporalExpiry)
   - `policies` (id, orgId FK, name, domain enum, effect enum, activeVersionId FK, createdAt)
   - `policyVersions` (id, policyId FK, versionNumber, constraints JSONB, cedarSource TEXT, cedarHash TEXT, createdAt, createdBy)
-  - `policyAssignments` (id, policyId FK, policyVersionId FK, groupId FK nullable, agentDid TEXT nullable, assignedAt) — CHECK: exactly one of groupId or agentDid
+  - `policyAssignments` (id, policyId FK, groupId FK nullable, agentDid TEXT nullable, assignedAt) — CHECK: exactly one of groupId or agentDid. Always uses policy's `activeVersionId`, no version pinning.
   - `decisionLog` (id, evaluatedAt, agentDid, actionTypeId FK, requestContext JSONB, bundleHash, outcome enum, reason, matchedVersionId FK, engineErrorCode, sdkErrorCode, envelopeSnapshot JSONB)
   - `petitions` (id, orgId FK, requestorDid, actionTypeId FK, requestedContext JSONB, violatedPolicyId FK, violatedDimension, requestedValue JSONB, justification, approverDid, approverGroupId FK, status enum, decisionReason, expiresAt, grantExpiresAt, createdAt, decidedAt)
   - Postgres enums: `domain`, `policy_effect`, `dimension_kind`, `decision_outcome`, `petition_status`
@@ -157,8 +157,8 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
   1. Recursive CTE to find agent's direct group memberships + all ancestor groups
   2. Collect all `policyAssignments` from ancestor groups + direct agent assignments
   3. Load active `policyVersions` with JSONB constraints
-  4. Check for approved, non-expired petitions for this agent (widen dimensions temporarily)
-  5. Resolve dimensions by kind: numeric → min, set → intersection, boolean → OR, temporal → tightest window (latest start, earliest end, earliest expiry), rate → min limit
+  4. *(Future)* Check for approved, non-expired petitions for this agent (widen dimensions temporarily)
+  5. Resolve dimensions by kind: numeric → min, set → intersection, boolean → most restrictive (using `restrictive` flag), temporal → earliest expiry, rate → min limit
   6. Apply deny overrides: any deny-effect policy sets `denied: true` on its action
   7. Build `ResolvedEnvelope` with full provenance chain (`DimensionSource` per constraint)
 - `packages/rules-engine/src/cedar-gen.ts` — `generateCedar(policy, constraints, assignmentTarget)`:
@@ -167,10 +167,10 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
   - Includes policy metadata as Cedar comments (policy name, version, assignment target)
   - Handles all 5 dimension kinds in `when` clause:
     - numeric: `context.amount <= 5000`
-    - set: `context.vendor in ["aws", "azure"]`
+    - set: `[context.vendor].containsAny(["aws", "azure"])` (Cedar set membership)
     - boolean: `context.requires_human_approval == true`
-    - temporal: `context.hour >= 9 && context.hour < 17`
-    - rate: expressed as numeric constraint on count context variable
+    - temporal: expiry checked at envelope resolution time, not in Cedar
+    - rate: `context.transactions_last_hour <= 10` (caller-provided numeric context)
   - Generates `forbid` blocks for deny-effect policies
 - `packages/rules-engine/src/seed.ts` — seed migration function:
   - Creates Acme Corp organization
@@ -195,26 +195,24 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
 - `packages/rules-engine/__tests__/envelope.test.ts`:
   - Resolves numeric dimensions to minimum across hierarchy (org 5000, dept 2000 → 2000)
   - Resolves set dimensions to intersection (org [aws, azure, gcp], team [aws, gcp] → [aws, gcp])
-  - Resolves boolean dimensions with OR (org false, team true → true)
-  - Resolves temporal dimensions to tightest window (org 9-17, team 9-12 → 9-12)
+  - Resolves boolean dimensions with `restrictive` flag (gate: org false + team true → true; permission: org true + team false → false)
+  - Resolves temporal dimensions to earliest expiry (org 2026-12-31, team 2026-06-30 → 2026-06-30)
   - Resolves rate dimensions to minimum limit (org 10/hour, team 5/hour → 5/hour)
   - Deny policy overrides all permits (deny at any level → denied: true with denySource)
   - Includes full provenance chain — each dimension lists policy name, group name, level, and value
   - Handles agent in multiple groups (most restrictive intersection across all paths)
   - Direct agent assignment narrows further (group 5000, agent-level 1000 → 1000)
   - Returns empty envelope (no matching actions) when agent has no group memberships
-  - Approved petition temporarily widens a dimension for the petitioned value
-  - Expired petition has no effect on envelope
 - `packages/rules-engine/__tests__/cedar-gen.test.ts`:
   - Generates deterministic Cedar source (snapshot test — same constraints → identical string)
   - Generates `permit` block for allow policies with `when` clause
   - Generates `forbid` block for deny policies
   - Includes policy name, version, and assignment target as Cedar comments
   - Handles numeric dimension: `context.amount <= 5000`
-  - Handles set dimension: `context.vendor in ["aws", "azure", "gcp"]`
+  - Handles set dimension: `[context.vendor].containsAny(["aws", "azure", "gcp"])`
   - Handles boolean dimension: `context.requires_human_approval == true`
-  - Handles temporal dimension: `context.hour >= 9 && context.hour < 17`
-  - Handles rate dimension as numeric constraint
+  - Handles temporal dimension: expiry checked at resolution time, not generated into Cedar
+  - Handles rate dimension: `context.transactions_last_hour <= 10` (caller-provided numeric)
   - Handles policy with no dimensions (unconditional permit/forbid)
   - Handles policy with multiple action types (generates separate blocks)
 - `packages/rules-engine/__tests__/seed.test.ts`:
@@ -253,7 +251,7 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
 
 **Tests:**
 - `packages/rules-engine/__tests__/cedar-eval.test.ts`:
-  - Permits when all conditions met (amount within limit, vendor in set, category in set, within business hours)
+  - Permits when all conditions met (amount within limit, vendor in set, category in set)
   - Denies when amount exceeds limit (returns `DIMENSION_EXCEEDED` / `OVER_LIMIT`)
   - Denies when vendor not in set (returns `DIMENSION_NOT_IN_SET` / `VENDOR_NOT_APPROVED`)
   - Denies when category not permitted (returns `DIMENSION_NOT_IN_SET` / `CATEGORY_DENIED`)
@@ -275,28 +273,22 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
   - `rebuildOnVersionBump` skips rebuild when version is current
 
 **Demo checkpoint:** Seed the database. Create the evaluator, load policies and entities. Evaluate a purchase check for the OpenClaw agent:
-- `{ principal: 'Agent::"did:mesh:..."', action: 'Action::"purchase.initiate"', resource: 'Resource::"vendor-acme-001"', context: { amount: 2500, vendor: "vendor-acme-001", category: "compute", hour: 10 } }` → `Allow`
+- `{ principal: 'Agent::"did:mesh:..."', action: 'Action::"purchase.initiate"', resource: 'Resource::"vendor-acme-001"', context: { amount: 2500, vendor: "vendor-acme-001", category: "compute" } }` → `Allow`
 - Same with `amount: 6000` → `Deny` with `DIMENSION_EXCEEDED` / `OVER_LIMIT`
 - Same with `vendor: "sketchy-vendor"` → `Deny` with `DIMENSION_NOT_IN_SET` / `VENDOR_NOT_APPROVED`
 - Verify `principal in Group` works (agent is in Platform group → inherits Engineering dept policies → inherits Acme org policies)
 
 ---
 
-### Phase 4: SDK + Sidecar Integration + Cache
+### Phase 4: SDK + Sidecar Integration
 
-**Goal:** The storefront SDK and sidecar use the rules engine for authorization. Two-phase check works end-to-end. Envelope cache with version counter + NOTIFY invalidation.
+**Goal:** The storefront SDK and sidecar use the rules engine for authorization. Two-phase check works end-to-end. Envelope cache interface delivered with no-op default.
 
 **Deliverables:**
-- `packages/rules-engine/src/cache.ts` — `EnvelopeCache` class:
-  - In-memory `Map<string, CachedEnvelope>` storing resolved envelopes keyed by agent DID
-  - `get(agentDid, currentPolicyVersion)` — returns cached envelope if `policyVersion` matches, null if stale
-  - `set(agentDid, envelope, policyVersion)` — stores envelope with version tag
-  - `invalidate(agentDid)` — removes single entry
-  - `invalidateAll()` — clears entire cache
-  - `invalidateForGroup(db, groupId)` — recursive CTE to find all agents in group + descendant groups, invalidates all of them
-  - `startListening(db)` — subscribes to Postgres `NOTIFY policy_change` channel, invalidates affected agents on event
-  - `stopListening()` — unsubscribes from NOTIFY channel
-- DB trigger migration — `NOTIFY policy_change` on INSERT/UPDATE/DELETE to `policyAssignments`, `agentGroupMemberships`, `policyVersions` tables (fires `NOTIFY` with `orgId` and new `policyVersion`)
+- `packages/rules-engine/src/cache.ts` — `EnvelopeCache` interface + `NoOpEnvelopeCache` default:
+  - `EnvelopeCache` interface: `get(agentDid)`, `set(agentDid, envelope)`, `invalidate(agentDid)`, `invalidateAll()`
+  - `NoOpEnvelopeCache`: always returns `null` on `get()`, forcing fresh resolution on every request
+  - `CachedEnvelope` type with `policyVersion` field for future version-based implementations
 - Update `packages/storefront-sdk/src/verify.ts`:
   - Rename existing `verifyAuthorization()` to `localAuthorizationCheck()` (unchanged logic)
   - Add `engineAuthorizationCheck(agentDid, action, context, callerContext?)` — calls `CedarEvaluator.check()` with envelope-resolved context
@@ -319,14 +311,10 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
 
 **Tests:**
 - `packages/rules-engine/__tests__/cache.test.ts`:
-  - Cache returns envelope when version matches
-  - Cache returns null when version is stale (policyVersion incremented)
-  - `invalidate(agentDid)` removes specific entry
-  - `invalidateAll()` clears all entries
-  - `invalidateForGroup(groupId)` invalidates all agents in group + descendants
-  - NOTIFY listener triggers invalidation on policy_assignment change
-  - NOTIFY listener triggers invalidation on membership change
-  - Cache recomputes envelope after invalidation on next access
+  - `NoOpEnvelopeCache.get()` always returns null
+  - `NoOpEnvelopeCache.set()` is a no-op (subsequent get still returns null)
+  - `NoOpEnvelopeCache.invalidate()` and `invalidateAll()` are no-ops
+  - `EnvelopeCache` interface is correctly implemented by `NoOpEnvelopeCache`
 - `packages/rules-engine/__tests__/integration.test.ts`:
   - End-to-end: create policy → generate Cedar → assign to group → evaluate via evaluator → verify decision log entry written
   - Policy update: change spending limit → cache invalidated → next evaluation uses new limit
@@ -356,54 +344,28 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
 
 ### Phase 5: Petitioning + Management API
 
-**Goal:** Agents can petition policy denials. Admins manage policies, groups, assignments, and petitions via authenticated API endpoints. Decision log is queryable.
+**Goal:** Management API for policy CRUD, group hierarchy, assignments, envelope queries, and decision log. Petition endpoint stubs defined but not implemented. All endpoints internal-only (no auth).
 
 **Deliverables:**
-- `packages/rules-engine/src/petition.ts`:
-  - `routePetition(db, agentDid, violatedPolicyId, violatedDimension, requestedValue)`:
-    1. Get agent's group memberships
-    2. Walk up hierarchy via recursive CTE
-    3. At each level, resolve that level's envelope for the violated dimension
-    4. Find lowest level whose envelope would permit the requested value
-    5. Return `{ approverDid, approverGroupId }` (admin of that group)
-    6. If no level permits, route to org root admin
-  - `decidePetition(db, petitionId, decision, reason, grantExpiresAt?)`:
-    - Updates petition status to `approved` or `denied`
-    - If approved, sets `grantExpiresAt` (default: 24 hours from now)
-    - Increments org `policyVersion` to invalidate caches
-  - Integration with `resolveEnvelope()`: step 5 checks for approved, non-expired petitions for the agent + action + dimension, temporarily widens the resolved value
-- `apps/api/src/routes/policies/` — management API routes (all require entity-scoped JWT):
+- `packages/rules-engine/src/petition.ts` — petition data model, Zod schemas, and types only. No routing algorithm, no approval logic, no envelope integration. These are documented in the spec for future implementation.
+- `apps/api/src/routes/policies/` — management API routes (all internal-only, no auth middleware):
   - **Policy CRUD:** `GET/POST /api/policies/rules`, `GET/PUT/DELETE /api/policies/rules/:id`
   - **Versions:** `GET/POST /api/policies/rules/:id/versions`, `POST /api/policies/rules/:id/versions/:vid/activate`
-    - Version creation is atomic: validates constraints → generates Cedar → validates Cedar → stores version → activates → increments `policyVersion` → triggers NOTIFY → all in one transaction
+    - Version creation is atomic: validates constraints → generates Cedar → validates Cedar → stores version → activates → increments `policyVersion` → all in one transaction
   - **Groups:** `GET/POST /api/policies/groups`, `GET/DELETE /api/policies/groups/:id`, `GET/POST/DELETE /api/policies/groups/:id/members`, `GET /api/policies/groups/:id/ancestors`, `GET /api/policies/groups/:id/descendants`
   - **Assignments:** `POST/DELETE /api/policies/assignments`, `GET /api/policies/assignments?groupId=&agentDid=`
   - **Envelope:** `GET /api/policies/agents/:did/envelope` (rich — full provenance), `GET /api/policies/agents/:did/policies`
   - **Check:** `POST /api/policies/check` (Cedar evaluation endpoint — used by sidecar proxy and SDK)
   - **Decisions:** `GET /api/policies/decisions` (filters: agentDid, outcome, dateRange; pagination), `GET /api/policies/decisions/:id`
   - **Action types:** `GET /api/policies/action-types`, `GET /api/policies/action-types/:id`
-  - **Petitions:** `POST /api/policies/petitions` (agent files), `GET /api/policies/petitions?status=&approverDid=` (admin list), `POST /api/policies/petitions/:id/decide` (admin decides), `GET /api/policies/petitions/:id`
-- `apps/api/src/middleware/policy-auth.ts` — entity-scoped JWT auth middleware:
-  - Extracts JWT from Authorization header
-  - Validates `orgId` claim matches the resource being accessed
-  - Validates `role` claim includes `admin` or `policy-admin`
-  - Attaches admin context to request
+  - **Petitions (stubs):** `POST /api/policies/petitions`, `GET /api/policies/petitions`, `POST /api/policies/petitions/:id/decide`, `GET /api/policies/petitions/:id` — all return `501 Not Implemented` with documented response shapes
 
 **Dependencies:** Phase 4 (evaluator integration, cache). Management API routes depend on the engine library being functional.
 
 **Tests:**
 - `packages/rules-engine/__tests__/petition.test.ts`:
-  - Routes petition to lowest authority that covers the exception:
-    - Agent in Team (limit 2000), Dept (limit 5000), Org (limit 25000)
-    - Request amount 6000 → routes to Org (lowest that permits 6000)
-    - Request amount 3000 → routes to Dept (lowest that permits 3000)
-  - Routes to org root when no level permits the request (e.g., $30000 > org limit $25000)
-  - Approved petition temporarily widens dimension in envelope resolution
-  - Expired petition has no effect on envelope (grantExpiresAt in the past)
-  - Cancelled petition has no effect on envelope
-  - Petition decision increments policyVersion (cache invalidation)
-  - Petition requires entity-scoped JWT for approval (agent can't approve their own)
-  - Agent can only petition for actions they've actually been denied on
+  - Petition data model validates with Zod (correct input accepted, invalid rejected)
+  - Petition Zod schemas match spec response shapes
 - Management API endpoint tests:
   - Policy CRUD: create, read, update, delete with Zod validation
   - Version creation: atomic — constraints → Cedar gen → validate → store → activate → policyVersion bump
@@ -414,19 +376,15 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
   - Envelope: returns resolved envelope with full provenance for agent
   - Check endpoint: evaluates Cedar and returns CheckResponse with dual error codes
   - Decision log: filters by agentDid, outcome, dateRange; pagination works
-  - Entity-scoped auth: reject requests where JWT orgId doesn't match resource's orgId
-  - Entity-scoped auth: reject requests without admin role
+  - Petition stub endpoints: all return 501 with documented response shapes
 
 **Demo checkpoint:**
 1. Admin creates a new policy via `POST /api/policies/rules` → gets policy ID
 2. Admin creates a version with constraints → Cedar is auto-generated, validated, stored, activated
-3. Admin assigns policy to a group → policyVersion bumps, cache invalidated
+3. Admin assigns policy to a group → policyVersion bumps
 4. Agent evaluates via `POST /api/policies/check` → uses the new policy
-5. Agent gets denied on over-limit purchase → files petition via `POST /api/policies/petitions`
-6. Petition routes to lowest sufficient authority → admin sees pending petition
-7. Admin approves petition → agent retries → approved this time (petition widens envelope temporarily)
-8. After `grantExpiresAt` passes → agent is denied again (petition expired)
-9. Full cycle logged in decision log with bundle hash, engine/SDK error codes, and envelope snapshot
+5. Query decision log → see evaluation entry with bundle hash and error codes
+6. Petition endpoints return 501 with correct response shapes
 
 ---
 
@@ -459,17 +417,16 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
     - **Policies** tab — assigned policies with version info and effect
     - **Hierarchy** tab — visual tree showing ancestors above and descendants below
 - **Petition pages** (`apps/dashboard/src/app/petitions/`):
-  - Admin view: pending petitions assigned to current admin. Shows requestor, action type, dimension, requested value, justification. Approve/deny actions with reason field.
-  - Agent view: agent's own petitions with status tracking and decision history.
+  - Placeholder "Coming Soon" page. Petition implementation is deferred post-demo. Page explains the planned workflow and links to the spec.
 - **Components** (`apps/dashboard/src/components/`):
   - `envelope/EnvelopeView.tsx` — main envelope visualization component
-  - `envelope/DimensionDisplay.tsx` — renders dimension value by kind (numeric bar, set chips, boolean toggle, temporal range, rate gauge)
+  - `envelope/DimensionDisplay.tsx` — renders dimension value by kind (numeric bar, set chips, boolean toggle, expiry date badge, rate gauge)
   - `envelope/InheritanceChain.tsx` — collapsible provenance chain (policy → group → level → value)
   - `envelope/DenyBanner.tsx` — deny override indicator with source policy link
   - `cedar/CedarSourceViewer.tsx` — syntax-highlighted Cedar source (keywords, strings, operators, comments)
   - `repl/PolicyREPL.tsx` — action type selector, dimension input fields, execute button, result display
   - `repl/DimensionInputField.tsx` — auto-generated input field based on dimension kind
-  - `petitions/PetitionCard.tsx` — petition summary with approve/deny actions
+  - `petitions/PetitionComingSoon.tsx` — placeholder page with planned workflow description
 
 **Dependencies:** Phase 5 (management API endpoints, petition workflow). All dashboard pages call the management API.
 
@@ -482,14 +439,14 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
   - `CedarSourceViewer` highlights Cedar keywords
   - `PolicyREPL` auto-generates correct input fields for selected action type
   - `PolicyREPL` shows Allow/Deny result after executing check
-  - `PetitionCard` shows approve/deny buttons for admin, status badge for agent
+  - `PetitionComingSoon` renders placeholder with link to spec
 - End-to-end (manual verification):
   - Navigate to agent → see envelope with full inheritance chain
   - Open REPL → select purchase.initiate → fill amount=2500, vendor=aws, category=compute → Test → Allow
   - Change amount to 6000 → Test → Deny with OVER_LIMIT and dimension breakdown
   - Navigate to policy → view Cedar source → matches expected deterministic output
   - Navigate to policy → view history → see version timeline with hashes
-  - Approve a petition → agent's envelope shows temporarily widened dimension
+  - Navigate to Petitions → see "Coming Soon" placeholder page
 
 **Demo checkpoint:** Full dashboard walkthrough:
 1. Open dashboard → navigate to Policies → see all seeded policies
@@ -497,7 +454,7 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
 3. Navigate to Agents → click OpenClaw agent → Envelope tab shows full permissions with inheritance chain from org → dept → team
 4. Switch to Test tab → select purchase.initiate → fill context → click Test → see Allow/Deny with full breakdown
 5. Navigate to Groups → see Acme Corp tree → click Engineering → see members and assigned policies
-6. Open Petitions → approve a pending petition → navigate back to agent → envelope shows widened dimension with expiry badge
+6. Navigate to Petitions → see "Coming Soon" placeholder with planned workflow description
 
 ---
 
@@ -513,7 +470,7 @@ Build `packages/rules-engine/`, a TypeScript policy evaluation and management li
 
 5. **Decision log storage growth:** Every policy check writes a decision log entry. At high throughput, this table grows fast. Consider: partitioning by `evaluatedAt`, retention policy (delete entries older than N days), or write to a separate analytics store. Not in scope for the initial implementation.
 
-6. **NOTIFY reliability:** Postgres `LISTEN/NOTIFY` is best-effort — notifications can be lost if the connection drops. The version counter is the primary consistency mechanism; NOTIFY is an optimization to avoid polling. If a NOTIFY is missed, the next cache read will detect the stale version and recompute.
+6. **Caching strategy (deferred):** The `EnvelopeCache` interface is defined with a `NoOpEnvelopeCache` default. When caching becomes necessary, the `organizations.policyVersion` counter provides the staleness signal. Cross-process invalidation (e.g., Postgres NOTIFY) is a further optimization for multi-process deployments — not in scope for initial implementation.
 
 ## References
 
