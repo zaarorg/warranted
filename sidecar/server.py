@@ -163,10 +163,11 @@ async def check_authorization(vendor: str, amount: float, category: str):
                 )
                 result = response.json()
 
-            authorized = result.get("decision") == "Allow"
-            diagnostics = result.get("diagnostics", [])
+            data = result.get("data", result)  # unwrap { success, data } envelope
+            authorized = data.get("decision") == "Allow"
+            diagnostics = data.get("diagnostics", [])
             reasons = diagnostics if not authorized and diagnostics else (["within policy"] if authorized else ["policy denied"])
-            requires_approval = result.get("details", {}).get("requires_human_approval", False)
+            requires_approval = data.get("details", {}).get("requires_human_approval", False)
 
             return {
                 "authorized": authorized,

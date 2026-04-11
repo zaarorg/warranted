@@ -20,27 +20,56 @@ function rateWindowToContextField(dimensionName: string, window: string): string
  * Generate a single Cedar `when` condition from a dimension constraint.
  * Returns null for temporal dimensions (checked at resolution time, not in Cedar).
  *
- * For deny/forbid policies, numeric and rate conditions are inverted:
- * - allow: `context.amount <= 5000` (permit if within limit)
- * - deny:  `context.amount > 25000` (forbid if exceeding cap)
+ * All conditions are generated in "forbid" form (condition that should trigger denial):
+ * - numeric: `context.amount > 5000` (deny if exceeding limit)
+ * - set:     `!([context.vendor].containsAny([...]))` (deny if not in set)
+ * - rate:    `context.transactions_last_hour > 10` (deny if exceeding rate)
+ * - boolean: `context.requires_human_approval != true` (deny if flag mismatch)
+ *
+ * This ensures Cedar's default-deny semantics work correctly: a single
+ * unconditional permit is paired with forbid rules for each constraint,
+ * so ALL constraints must pass (conjunctive), not just one (disjunctive).
  */
-function dimensionToCondition(dim: DimensionConstraint, effect: "allow" | "deny"): string | null {
+/**
+ * For "allow" policies converted to forbid: negate the condition so the
+ * forbid fires when the constraint is VIOLATED.
+ * E.g. approved-vendors allow → forbid when vendor NOT in approved set.
+ */
+function dimensionToForbidCondition(dim: DimensionConstraint): string | null {
   switch (dim.kind) {
     case "numeric":
-      return effect === "deny"
-        ? `context.${dim.name} > ${dim.max}`
-        : `context.${dim.name} <= ${dim.max}`;
+      return `context has "${dim.name}" && context.${dim.name} > ${dim.max}`;
     case "set":
-      return `[context.${dim.name}].containsAny([${dim.members.map((m) => `"${m}"`).join(", ")}])`;
+      return `context has "${dim.name}" && !([context.${dim.name}].containsAny([${dim.members.map((m) => `"${m}"`).join(", ")}]))`;
     case "boolean":
-      return `context.${dim.name} == ${dim.value}`;
+      return `context has "${dim.name}" && context.${dim.name} != ${dim.value}`;
     case "temporal":
       return null;
     case "rate": {
       const field = rateWindowToContextField(dim.name, dim.window);
-      return effect === "deny"
-        ? `context.${field} > ${dim.limit}`
-        : `context.${field} <= ${dim.limit}`;
+      return `context has "${field}" && context.${field} > ${dim.limit}`;
+    }
+  }
+}
+
+/**
+ * For explicit "deny" policies: condition fires when the denial criteria
+ * is MET (positive match).
+ * E.g. sanctioned-vendors deny → forbid when vendor IS in sanctioned set.
+ */
+function dimensionToDenyCondition(dim: DimensionConstraint): string | null {
+  switch (dim.kind) {
+    case "numeric":
+      return `context has "${dim.name}" && context.${dim.name} > ${dim.max}`;
+    case "set":
+      return `context has "${dim.name}" && [context.${dim.name}].containsAny([${dim.members.map((m) => `"${m}"`).join(", ")}])`;
+    case "boolean":
+      return `context has "${dim.name}" && context.${dim.name} == ${dim.value}`;
+    case "temporal":
+      return null;
+    case "rate": {
+      const field = rateWindowToContextField(dim.name, dim.window);
+      return `context has "${field}" && context.${field} > ${dim.limit}`;
     }
   }
 }
@@ -55,6 +84,19 @@ function dimensionToCondition(dim: DimensionConstraint, effect: "allow" | "deny"
  * @param assignmentTarget - Cedar entity UID for the assignment target (e.g. Group::"uuid")
  * @returns Deterministic Cedar source string
  */
+/**
+ * Generate deterministic Cedar source from structured constraints.
+ *
+ * **Cedar semantics note:** Cedar's `permit` policies are disjunctive — if ANY
+ * permit matches (and no forbid matches), the request is Allowed. This means
+ * multiple independent permit policies cannot enforce conjunctive (AND) constraints.
+ *
+ * To enforce that ALL constraints must pass:
+ * - **Allow policies** generate one unconditional `permit` (grants the action) plus
+ *   one `forbid` per dimension (denies when the constraint is violated). This ensures
+ *   every dimension is a mandatory gate.
+ * - **Deny policies** generate `forbid` blocks directly (deny when condition matches).
+ */
 export function generateCedar(
   policyName: string,
   versionNumber: number,
@@ -62,8 +104,6 @@ export function generateCedar(
   constraints: PolicyConstraint[],
   assignmentTarget: string,
 ): string {
-  const cedarEffect = effect === "allow" ? "permit" : "forbid";
-
   // Sort constraints by actionName for determinism
   const sorted = [...constraints].sort((a, b) => a.actionName.localeCompare(b.actionName));
 
@@ -73,43 +113,73 @@ export function generateCedar(
     // Sort dimensions alphabetically by name for determinism
     const sortedDims = [...constraint.dimensions].sort((a, b) => a.name.localeCompare(b.name));
 
-    // Generate conditions, filtering out temporal (null)
-    const conditions = sortedDims
-      .map((dim) => dimensionToCondition(dim, effect))
+    // Generate conditions based on policy effect
+    const conditionFn = effect === "allow" ? dimensionToForbidCondition : dimensionToDenyCondition;
+    const forbidConditions = sortedDims
+      .map((dim) => conditionFn(dim))
       .filter((c): c is string => c !== null);
 
-    const lines: string[] = [];
-
     // Cedar comments
-    lines.push(`// Policy: "${policyName}" (v${versionNumber})`);
-    lines.push(`// Assigned to: ${assignmentTarget}`);
+    const comment = [
+      `// Policy: "${policyName}" (v${versionNumber})`,
+      `// Assigned to: ${assignmentTarget}`,
+    ].join("\n");
 
     // Skip blocks where dimensions exist but all are temporal (no Cedar conditions).
-    // Temporal constraints are checked at resolution time, not in Cedar.
-    // An unconditional permit would override other policies' deny semantics.
-    if (conditions.length === 0 && sortedDims.length > 0) {
-      lines.push(`// Temporal-only policy — enforced at resolution time, not in Cedar`);
-      blocks.push(lines.join("\n"));
+    if (forbidConditions.length === 0 && sortedDims.length > 0) {
+      blocks.push(`${comment}\n// Temporal-only policy — enforced at resolution time, not in Cedar`);
       continue;
     }
 
-    // Head
-    lines.push(`${cedarEffect} (`);
-    lines.push(`  principal in ${assignmentTarget},`);
-    lines.push(`  action == Action::"${constraint.actionName}",`);
-    lines.push(`  resource`);
-    lines.push(`)`);
+    if (effect === "allow") {
+      // Allow policy: unconditional permit + per-dimension forbids
+      const permitLines = [
+        comment,
+        `permit (`,
+        `  principal in ${assignmentTarget},`,
+        `  action == Action::"${constraint.actionName}",`,
+        `  resource`,
+        `);`,
+      ];
+      blocks.push(permitLines.join("\n"));
 
-    // When clause (only if there are conditions)
-    if (conditions.length > 0) {
-      lines.push(`when {`);
-      lines.push(`  ${conditions.join(" &&\n  ")}`);
-      lines.push(`};`);
+      // One forbid block per dimension condition
+      for (let i = 0; i < sortedDims.length; i++) {
+        const condition = dimensionToForbidCondition(sortedDims[i]);
+        if (condition === null) continue;
+
+        const forbidLines = [
+          `// Policy: "${policyName}" (v${versionNumber}) — constraint: ${sortedDims[i].name}`,
+          `forbid (`,
+          `  principal in ${assignmentTarget},`,
+          `  action == Action::"${constraint.actionName}",`,
+          `  resource`,
+          `)`,
+          `when {`,
+          `  ${condition}`,
+          `};`,
+        ];
+        blocks.push(forbidLines.join("\n"));
+      }
     } else {
-      lines.push(`;`);
-    }
+      // Deny policy: forbid when condition matches (existing behavior)
+      const forbidLines = [comment];
+      forbidLines.push(`forbid (`);
+      forbidLines.push(`  principal in ${assignmentTarget},`);
+      forbidLines.push(`  action == Action::"${constraint.actionName}",`);
+      forbidLines.push(`  resource`);
+      forbidLines.push(`)`);
 
-    blocks.push(lines.join("\n"));
+      if (forbidConditions.length > 0) {
+        forbidLines.push(`when {`);
+        forbidLines.push(`  ${forbidConditions.join(" &&\n  ")}`);
+        forbidLines.push(`};`);
+      } else {
+        forbidLines.push(`;`);
+      }
+
+      blocks.push(forbidLines.join("\n"));
+    }
   }
 
   return blocks.join("\n\n");
