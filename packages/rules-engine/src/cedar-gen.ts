@@ -19,11 +19,17 @@ function rateWindowToContextField(dimensionName: string, window: string): string
 /**
  * Generate a single Cedar `when` condition from a dimension constraint.
  * Returns null for temporal dimensions (checked at resolution time, not in Cedar).
+ *
+ * For deny/forbid policies, numeric and rate conditions are inverted:
+ * - allow: `context.amount <= 5000` (permit if within limit)
+ * - deny:  `context.amount > 25000` (forbid if exceeding cap)
  */
-function dimensionToCondition(dim: DimensionConstraint): string | null {
+function dimensionToCondition(dim: DimensionConstraint, effect: "allow" | "deny"): string | null {
   switch (dim.kind) {
     case "numeric":
-      return `context.${dim.name} <= ${dim.max}`;
+      return effect === "deny"
+        ? `context.${dim.name} > ${dim.max}`
+        : `context.${dim.name} <= ${dim.max}`;
     case "set":
       return `[context.${dim.name}].containsAny([${dim.members.map((m) => `"${m}"`).join(", ")}])`;
     case "boolean":
@@ -32,7 +38,9 @@ function dimensionToCondition(dim: DimensionConstraint): string | null {
       return null;
     case "rate": {
       const field = rateWindowToContextField(dim.name, dim.window);
-      return `context.${field} <= ${dim.limit}`;
+      return effect === "deny"
+        ? `context.${field} > ${dim.limit}`
+        : `context.${field} <= ${dim.limit}`;
     }
   }
 }
@@ -67,7 +75,7 @@ export function generateCedar(
 
     // Generate conditions, filtering out temporal (null)
     const conditions = sortedDims
-      .map((dim) => dimensionToCondition(dim))
+      .map((dim) => dimensionToCondition(dim, effect))
       .filter((c): c is string => c !== null);
 
     const lines: string[] = [];
@@ -75,6 +83,15 @@ export function generateCedar(
     // Cedar comments
     lines.push(`// Policy: "${policyName}" (v${versionNumber})`);
     lines.push(`// Assigned to: ${assignmentTarget}`);
+
+    // Skip blocks where dimensions exist but all are temporal (no Cedar conditions).
+    // Temporal constraints are checked at resolution time, not in Cedar.
+    // An unconditional permit would override other policies' deny semantics.
+    if (conditions.length === 0 && sortedDims.length > 0) {
+      lines.push(`// Temporal-only policy — enforced at resolution time, not in Cedar`);
+      blocks.push(lines.join("\n"));
+      continue;
+    }
 
     // Head
     lines.push(`${cedarEffect} (`);

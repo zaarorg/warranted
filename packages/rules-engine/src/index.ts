@@ -77,6 +77,12 @@ export type { CedarEngine } from "./cedar-wasm";
 export { resolveEnvelope } from "./envelope";
 export type { DrizzleDB } from "./envelope";
 
+// Cedar evaluator
+export { CedarEvaluator } from "./evaluator";
+
+// Entity store
+export { buildEntityStore, rebuildOnVersionBump } from "./entity-store";
+
 // Cedar source generation
 export { generateCedar } from "./cedar-gen";
 
