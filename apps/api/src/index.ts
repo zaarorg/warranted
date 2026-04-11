@@ -1,8 +1,11 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { db } from "./db";
 import { policyRoutes } from "./routes/policies/index";
 
 const app = new Hono();
+
+app.use("/*", cors());
 
 // Mount policy management routes
 app.route("/api/policies", policyRoutes(db));
