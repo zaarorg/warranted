@@ -95,30 +95,30 @@ export async function seed(db: DrizzleDB): Promise<void> {
     name: "Acme Corp",
     slug: "acme-corp",
     policyVersion: 1,
-  });
+  }).onConflictDoNothing();
 
   // 2. Group hierarchy
   await db.insert(schema.groups).values([
     { id: ACME_GROUP_ID, orgId: ORG_ID, name: "Acme Corp", nodeType: "org", parentId: null },
-  ]);
+  ]).onConflictDoNothing();
   await db.insert(schema.groups).values([
     { id: FINANCE_DEPT_ID, orgId: ORG_ID, name: "Finance", nodeType: "department", parentId: ACME_GROUP_ID },
     { id: ENGINEERING_DEPT_ID, orgId: ORG_ID, name: "Engineering", nodeType: "department", parentId: ACME_GROUP_ID },
     { id: OPERATIONS_DEPT_ID, orgId: ORG_ID, name: "Operations", nodeType: "department", parentId: ACME_GROUP_ID },
-  ]);
+  ]).onConflictDoNothing();
   await db.insert(schema.groups).values([
     { id: AP_TEAM_ID, orgId: ORG_ID, name: "Accounts Payable", nodeType: "team", parentId: FINANCE_DEPT_ID },
     { id: TREASURY_TEAM_ID, orgId: ORG_ID, name: "Treasury", nodeType: "team", parentId: FINANCE_DEPT_ID },
     { id: PLATFORM_TEAM_ID, orgId: ORG_ID, name: "Platform", nodeType: "team", parentId: ENGINEERING_DEPT_ID },
     { id: MLAI_TEAM_ID, orgId: ORG_ID, name: "ML/AI", nodeType: "team", parentId: ENGINEERING_DEPT_ID },
     { id: PROCUREMENT_TEAM_ID, orgId: ORG_ID, name: "Procurement", nodeType: "team", parentId: OPERATIONS_DEPT_ID },
-  ]);
+  ]).onConflictDoNothing();
 
   // 3. Agent membership — assigned to Platform team
   await db.insert(schema.agentGroupMemberships).values({
     agentDid: AGENT_DID,
     groupId: PLATFORM_TEAM_ID,
-  });
+  }).onConflictDoNothing();
 
   // 4. Action types (14 across 3 domains)
   await db.insert(schema.actionTypes).values([
@@ -139,7 +139,7 @@ export async function seed(db: DrizzleDB): Promise<void> {
     { id: ACTION_AGENT_CREATE_ID, domain: "agent_delegation", name: "agent.create", description: "Create a new agent" },
     { id: ACTION_AGENT_REVOKE_ID, domain: "agent_delegation", name: "agent.revoke", description: "Revoke an agent" },
     { id: ACTION_API_CALL_ID, domain: "agent_delegation", name: "api.call", description: "Call an external API" },
-  ]);
+  ]).onConflictDoNothing();
 
   // 5. Dimension definitions for purchase.initiate
   await db.insert(schema.dimensionDefinitions).values([
@@ -379,7 +379,7 @@ export async function seed(db: DrizzleDB): Promise<void> {
       rateLimit: 60,
       rateWindow: "1 minute",
     },
-  ]);
+  ]).onConflictDoNothing();
 
   // 6. Policies (9 from spending-policy.yaml + 2 cascading)
   const orgTarget = `Group::"${ACME_GROUP_ID}"`;
@@ -591,7 +591,7 @@ export async function seed(db: DrizzleDB): Promise<void> {
       domain: "finance",
       effect: p.effect,
       activeVersionId: null,
-    });
+    }).onConflictDoNothing();
   }
 
   // Insert policy versions with generated Cedar source
@@ -607,7 +607,7 @@ export async function seed(db: DrizzleDB): Promise<void> {
       cedarSource: cedar,
       cedarHash: hash,
       createdBy: "seed",
-    });
+    }).onConflictDoNothing();
   }
 
   // Set active version IDs
@@ -627,6 +627,6 @@ export async function seed(db: DrizzleDB): Promise<void> {
       policyId: p.id,
       groupId: p.assignTo,
       agentDid: null,
-    });
+    }).onConflictDoNothing();
   }
 }

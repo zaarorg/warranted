@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "drizzle-kit": "^0.31.10",
     "hono": "^4.12.12",
     "typescript": "^5.8.3",
     "vitest": "^3.1.1"

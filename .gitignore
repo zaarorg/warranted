@@ -169,6 +169,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!apps/dashboard/src/lib/
 lib64/
 parts/
 sdist/
