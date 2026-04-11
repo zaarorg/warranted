@@ -1,12 +1,12 @@
 ---
 name: warranted-identity
 description: "Agent identity, transaction governance, and storefront purchasing via Warranted. Use when: agent needs to verify identity, check spending authorization, sign transactions, or purchase from a vendor storefront. NOT for: non-financial operations."
-version: 0.3.0
+version: 0.4.0
 metadata:
   {
     "openclaw":
       {
-        "requires": { "bins": ["curl", "jq"] },
+        "requires": { "bins": ["curl"] },
       },
   }
 ---
@@ -74,32 +74,36 @@ curl -s http://demo-vendor:3001/.well-known/agent-storefront.json
 
 ### Step 2: Get your token
 
+Call the issue_token endpoint and extract the "token" field from the JSON response.
+
 ```bash
-TOKEN=$(curl -s -X POST http://warranted-sidecar:8100/issue_token | jq -r .token)
+curl -s -X POST http://warranted-sidecar:8100/issue_token
 ```
+
+Save the `token` value from the response as TOKEN for subsequent requests.
 
 ### Step 3: Browse the catalog
 
-Shows available items with prices and categories.
+Shows available items with prices and categories. Replace TOKEN with the actual token value.
 
 ```bash
-curl -s -H "Authorization: Bearer $TOKEN" http://demo-vendor:3001/agent-checkout/catalog
+curl -s -H "Authorization: Bearer TOKEN" http://demo-vendor:3001/agent-checkout/catalog
 ```
 
 ### Step 4: Create a purchase session
 
-Creates a transaction session. Save the sessionId.
+Creates a transaction session. Save the sessionId. Replace TOKEN and SKU_HERE.
 
 ```bash
-curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"items":[{"sku":"SKU_HERE","quantity":1}],"transactionType":"fixed-price"}' http://demo-vendor:3001/agent-checkout/session
+curl -s -X POST -H "Authorization: Bearer TOKEN" -H "Content-Type: application/json" -d '{"items":[{"sku":"SKU_HERE","quantity":1}],"transactionType":"fixed-price"}' http://demo-vendor:3001/agent-checkout/session
 ```
 
 ### Step 5: Settle the transaction
 
-Completes the purchase and returns a signed receipt.
+Completes the purchase and returns a signed receipt. Replace TOKEN and SESSION_ID.
 
 ```bash
-curl -s -X POST -H "Authorization: Bearer $TOKEN" http://demo-vendor:3001/agent-checkout/session/SESSION_ID/settle
+curl -s -X POST -H "Authorization: Bearer TOKEN" http://demo-vendor:3001/agent-checkout/session/SESSION_ID/settle
 ```
 
 ## Rules
