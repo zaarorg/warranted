@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@warranted/rules-engine": "workspace:*",
+    "@workos-inc/node": "^8.12.1",
     "drizzle-orm": "^0.40.1",
     "hono": "^4.12.12",
+    "jose": "^6.2.2",
     "postgres": "^3.4.9",
     "zod": "^3.24.2"
   },

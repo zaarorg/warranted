@@ -57,6 +57,7 @@ reputation_mgr.record_success(AGENT_ID, trace_id="boot")
 # Rules engine proxy (Phase 4)
 # ---------------------------------------------------------------------------
 RULES_ENGINE_URL = os.environ.get("RULES_ENGINE_URL", "")
+INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
 
 # ---------------------------------------------------------------------------
 # Spending policy (fallback when rules engine is not configured)
@@ -104,11 +105,15 @@ async def register_agent_in_rules_engine():
         return
     base_url = RULES_ENGINE_URL.rsplit("/check", 1)[0]
     members_url = f"{base_url}/groups/{PLATFORM_TEAM_GROUP_ID}/members"
+    headers = {}
+    if INTERNAL_API_SECRET:
+        headers["X-Internal-Token"] = INTERNAL_API_SECRET
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 members_url,
                 json={"agentDid": AGENT_DID},
+                headers=headers,
             )
             if resp.status_code in (200, 201):
                 logger.info(f"Registered agent {AGENT_DID} in Platform team")
@@ -177,10 +182,14 @@ async def check_authorization(vendor: str, amount: float, category: str):
                     "category": category,
                 },
             }
+            headers = {}
+            if INTERNAL_API_SECRET:
+                headers["X-Internal-Token"] = INTERNAL_API_SECRET
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.post(
                     RULES_ENGINE_URL,
                     json=check_request,
+                    headers=headers,
                 )
                 result = response.json()
 

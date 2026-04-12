@@ -43,6 +43,8 @@ export async function setupTestDb(): Promise<DrizzleDB> {
       name TEXT NOT NULL UNIQUE,
       slug TEXT NOT NULL UNIQUE,
       policy_version INTEGER NOT NULL DEFAULT 0,
+      workos_org_id TEXT UNIQUE,
+      workos_directory_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
@@ -52,7 +54,7 @@ export async function setupTestDb(): Promise<DrizzleDB> {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
-      node_type TEXT NOT NULL CHECK (node_type IN ('org', 'department', 'team')),
+      node_type TEXT NOT NULL DEFAULT 'unassigned' CHECK (node_type IN ('org', 'department', 'team', 'unassigned')),
       parent_id UUID REFERENCES groups(id),
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (org_id, name, parent_id)
@@ -144,6 +146,25 @@ export async function setupTestDb(): Promise<DrizzleDB> {
       engine_error_code TEXT,
       sdk_error_code TEXT,
       envelope_snapshot JSONB
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE workos_processed_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      event_id TEXT NOT NULL UNIQUE,
+      event_type TEXT NOT NULL,
+      processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE wos_sync_state (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id),
+      last_sync_at TIMESTAMPTZ,
+      sync_cursor TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
 

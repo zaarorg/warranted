@@ -15,6 +15,8 @@ export {
   policyAssignments,
   decisionLog,
   petitions,
+  workosProcessedEvents,
+  wosSyncState,
 } from "./schema";
 
 // Types and Zod schemas

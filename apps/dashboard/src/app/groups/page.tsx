@@ -92,11 +92,21 @@ export default function GroupsPage() {
 
   const tree = buildTree(groups);
   const hasOrg = orgs.length > 0;
+  const unassignedCount = groups.filter((g) => g.nodeType === "unassigned").length;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Groups</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-semibold">Groups</h1>
+          {unassignedCount > 0 && (
+            <Link href="/groups/setup">
+              <Badge variant="outline" className="text-xs cursor-pointer hover:bg-muted">
+                {unassignedCount} unassigned — Setup Required
+              </Badge>
+            </Link>
+          )}
+        </div>
         {!loading && !hasOrg && (
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger render={<Button />}>Create Organization</DialogTrigger>

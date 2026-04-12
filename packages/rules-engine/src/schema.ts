@@ -62,6 +62,8 @@ export const organizations = pgTable("organizations", {
   name: text().notNull().unique(),
   slug: text().notNull().unique(),
   policyVersion: integer("policy_version").notNull().default(0),
+  workosOrgId: text("workos_org_id").unique(),
+  workosDirectoryId: text("workos_directory_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -74,13 +76,13 @@ export const groups = pgTable(
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
     name: text().notNull(),
-    nodeType: text("node_type").notNull(),
+    nodeType: text("node_type").notNull().default("unassigned"),
     parentId: uuid("parent_id").references((): AnyPgColumn => groups.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     unique("groups_org_name_parent_uniq").on(table.orgId, table.name, table.parentId),
-    check("groups_node_type_check", sql`${table.nodeType} IN ('org', 'department', 'team')`),
+    check("groups_node_type_check", sql`${table.nodeType} IN ('org', 'department', 'team', 'unassigned')`),
   ],
 );
 
@@ -209,6 +211,25 @@ export const decisionLog = pgTable(
     index("decision_log_bundle_hash_idx").on(table.bundleHash),
   ],
 );
+
+/** WorkOS webhook event deduplication for idempotency + observability. */
+export const workosProcessedEvents = pgTable("workos_processed_events", {
+  id: uuid().defaultRandom().primaryKey(),
+  eventId: text("event_id").notNull().unique(),
+  eventType: text("event_type").notNull(),
+  processedAt: timestamp("processed_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Per-org SCIM sync tracking. */
+export const wosSyncState = pgTable("wos_sync_state", {
+  id: uuid().defaultRandom().primaryKey(),
+  orgId: uuid("org_id")
+    .notNull()
+    .references(() => organizations.id),
+  lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
+  syncCursor: text("sync_cursor"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 /** One-time exception requests (petitions). */
 export const petitions = pgTable(

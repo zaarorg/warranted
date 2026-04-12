@@ -25,7 +25,7 @@ export interface ResolvedDimension {
 export interface DimensionSource {
   policyName: string;
   groupName: string | null;
-  level: "org" | "department" | "team" | "agent";
+  level: "org" | "department" | "team" | "unassigned" | "agent";
   value: unknown;
 }
 
@@ -82,7 +82,7 @@ export interface Group {
   id: string;
   orgId: string;
   name: string;
-  nodeType: "org" | "department" | "team";
+  nodeType: "org" | "department" | "team" | "unassigned";
   parentId: string | null;
   createdAt: string;
 }
@@ -127,6 +127,8 @@ export interface Organization {
   name: string;
   slug: string;
   policyVersion: number;
+  workosOrgId: string | null;
+  workosDirectoryId: string | null;
   createdAt: string;
 }
 

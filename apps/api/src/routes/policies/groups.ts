@@ -7,7 +7,12 @@ import { z } from "zod";
 const CreateGroupSchema = z.object({
   orgId: z.string().uuid(),
   name: z.string().min(1),
-  nodeType: z.enum(["org", "department", "team"]),
+  nodeType: z.enum(["org", "department", "team", "unassigned"]),
+  parentId: z.string().uuid().nullable().optional(),
+});
+
+const UpdateGroupSchema = z.object({
+  nodeType: z.enum(["org", "department", "team"]).optional(),
   parentId: z.string().uuid().nullable().optional(),
 });
 
@@ -67,6 +72,35 @@ export function groupsRoutes(db: DrizzleDB): Hono {
       return c.json({ success: false, error: "Group not found" }, 404);
     }
     return c.json({ success: true, data: { deleted: true } });
+  });
+
+  // PATCH /:id — Update group (nodeType assignment, parentId)
+  app.patch("/:id", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json();
+    const parsed = UpdateGroupSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ success: false, error: parsed.error.format() }, 400);
+    }
+
+    const updates: Record<string, unknown> = {};
+    if (parsed.data.nodeType !== undefined) updates.nodeType = parsed.data.nodeType;
+    if (parsed.data.parentId !== undefined) updates.parentId = parsed.data.parentId;
+
+    if (Object.keys(updates).length === 0) {
+      return c.json({ success: false, error: "No fields to update" }, 400);
+    }
+
+    const rows = await db
+      .update(groups)
+      .set(updates)
+      .where(eq(groups.id, id))
+      .returning();
+
+    if (rows.length === 0) {
+      return c.json({ success: false, error: "Group not found" }, 404);
+    }
+    return c.json({ success: true, data: rows[0] });
   });
 
   // GET /:id/members — List agents in group
