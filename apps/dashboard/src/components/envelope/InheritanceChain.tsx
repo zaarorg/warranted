@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { DimensionSource } from "@/lib/types";
 
-const levelOrder = ["org", "department", "team", "agent"] as const;
+const levelOrder = ["org", "department", "team", "unassigned", "agent"] as const;
 
 export function InheritanceChain({ sources }: { sources: DimensionSource[] }) {
   const [open, setOpen] = useState(false);
