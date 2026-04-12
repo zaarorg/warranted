@@ -1,13 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiFetch } from "@/lib/api";
-import type { Group, GroupMembership, PolicyAssignment } from "@/lib/types";
+import type { Group, GroupMembership, Policy, PolicyAssignment } from "@/lib/types";
 
 interface AncestorRow {
   id: string;
@@ -26,21 +36,38 @@ export default function GroupDetailPage() {
   const [descendants, setDescendants] = useState<AncestorRow[]>([]);
   const [loading, setLoading] = useState(true);
 
+  /* assign-policy dialog state */
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [allPolicies, setAllPolicies] = useState<Policy[]>([]);
+  const [selectedPolicyId, setSelectedPolicyId] = useState("");
+  const [assigning, setAssigning] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+
+  const loadAssignments = useCallback(async () => {
+    const a = await apiFetch<PolicyAssignment[]>(
+      `/api/policies/assignments?groupId=${params.id}`,
+    );
+    setAssignments(a);
+  }, [params.id]);
+
   useEffect(() => {
     async function load() {
       try {
-        const [g, m, a, anc, desc] = await Promise.all([
+        const [g, m, a, anc, desc, policies] = await Promise.all([
           apiFetch<Group>(`/api/policies/groups/${params.id}`),
           apiFetch<GroupMembership[]>(`/api/policies/groups/${params.id}/members`),
           apiFetch<PolicyAssignment[]>(`/api/policies/assignments?groupId=${params.id}`),
           apiFetch<AncestorRow[]>(`/api/policies/groups/${params.id}/ancestors`),
           apiFetch<AncestorRow[]>(`/api/policies/groups/${params.id}/descendants`),
+          apiFetch<Policy[]>("/api/policies/rules"),
         ]);
         setGroup(g);
         setMembers(m);
         setAssignments(a);
         setAncestors(anc);
         setDescendants(desc);
+        setAllPolicies(policies);
       } catch (err) {
         console.error(err);
       } finally {
@@ -49,6 +76,50 @@ export default function GroupDetailPage() {
     }
     load();
   }, [params.id]);
+
+  /* Load available policies when the assign dialog opens */
+  useEffect(() => {
+    if (!assignOpen) return;
+    apiFetch<Policy[]>("/api/policies/rules")
+      .then(setAllPolicies)
+      .catch(console.error);
+  }, [assignOpen]);
+
+  async function handleAssign() {
+    if (!selectedPolicyId) {
+      setAssignError("Select a policy.");
+      return;
+    }
+    setAssigning(true);
+    setAssignError(null);
+    try {
+      await apiFetch<PolicyAssignment>("/api/policies/assignments", {
+        method: "POST",
+        body: JSON.stringify({ policyId: selectedPolicyId, groupId: params.id }),
+      });
+      setAssignOpen(false);
+      setSelectedPolicyId("");
+      await loadAssignments();
+    } catch (err) {
+      setAssignError(err instanceof Error ? err.message : "Failed to assign policy");
+    } finally {
+      setAssigning(false);
+    }
+  }
+
+  async function handleRemove(assignmentId: string) {
+    setRemovingId(assignmentId);
+    try {
+      await apiFetch(`/api/policies/assignments/${assignmentId}`, {
+        method: "DELETE",
+      });
+      await loadAssignments();
+    } catch (err) {
+      console.error("Failed to remove assignment", err);
+    } finally {
+      setRemovingId(null);
+    }
+  }
 
   if (loading) return <p className="text-sm text-muted-foreground">Loading...</p>;
   if (!group) return <p className="text-sm text-destructive">Group not found.</p>;
@@ -89,25 +160,86 @@ export default function GroupDetailPage() {
         </TabsContent>
 
         <TabsContent value="policies" className="mt-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-medium text-muted-foreground">
+              {assignments.length} {assignments.length === 1 ? "policy" : "policies"} assigned
+            </h2>
+            <Dialog open={assignOpen} onOpenChange={(open) => { setAssignOpen(open); if (!open) { setAssignError(null); setSelectedPolicyId(""); } }}>
+              <DialogTrigger render={<Button size="sm" />}>Assign Policy</DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Assign Policy</DialogTitle>
+                  <DialogDescription>
+                    Select a policy to assign to this group.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">Policy</label>
+                    <select
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                      value={selectedPolicyId}
+                      onChange={(e) => setSelectedPolicyId(e.target.value)}
+                    >
+                      <option value="">Select a policy...</option>
+                      {allPolicies
+                        .filter((p) => !assignments.some((a) => a.policyId === p.id))
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name} ({p.domain}, {p.effect})
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  {assignError && (
+                    <p className="text-sm text-destructive">{assignError}</p>
+                  )}
+                </div>
+
+                <DialogFooter>
+                  <Button onClick={handleAssign} disabled={assigning}>
+                    {assigning ? "Assigning..." : "Assign"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
+
           {assignments.length === 0 ? (
             <p className="text-sm text-muted-foreground">No policies assigned to this group.</p>
           ) : (
             <div className="space-y-1">
-              {assignments.map((a) => (
-                <Card key={a.id}>
-                  <CardContent className="py-3">
-                    <Link
-                      href={`/policies/${a.policyId}`}
-                      className="text-sm font-mono hover:underline"
-                    >
-                      {a.policyId}
-                    </Link>
-                    <span className="text-xs text-muted-foreground ml-2">
-                      assigned {new Date(a.assignedAt).toLocaleDateString()}
-                    </span>
-                  </CardContent>
-                </Card>
-              ))}
+              {assignments.map((a) => {
+                const policy = allPolicies.find((p) => p.id === a.policyId);
+                return (
+                  <Card key={a.id}>
+                    <CardContent className="py-3 flex items-center justify-between">
+                      <div>
+                        <Link
+                          href={`/policies/${a.policyId}`}
+                          className="text-sm font-mono hover:underline"
+                        >
+                          {policy ? policy.name : a.policyId}
+                        </Link>
+                        <span className="text-xs text-muted-foreground ml-2">
+                          assigned {new Date(a.assignedAt).toLocaleDateString()}
+                        </span>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:text-destructive"
+                        disabled={removingId === a.id}
+                        onClick={() => handleRemove(a.id)}
+                      >
+                        {removingId === a.id ? "Removing..." : "Remove"}
+                      </Button>
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           )}
         </TabsContent>
