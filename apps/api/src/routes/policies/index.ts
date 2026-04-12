@@ -9,8 +9,9 @@ import { decisionsRoutes } from "./decisions";
 import { actionTypesRoutes } from "./action-types";
 import { petitionsRoutes } from "./petitions";
 import { organizationsRoutes } from "./organizations";
+import type { RedisClient } from "../../redis";
 
-export function policyRoutes(db: DrizzleDB): Hono {
+export function policyRoutes(db: DrizzleDB, redis?: RedisClient | null): Hono {
   const app = new Hono();
 
   app.route("/organizations", organizationsRoutes(db));
@@ -24,7 +25,7 @@ export function policyRoutes(db: DrizzleDB): Hono {
   // Envelope and check routes are mounted at the policy level
   // (envelope routes use /agents/:did/... prefix, check uses /check)
   app.route("/", envelopeRoutes(db));
-  app.route("/", checkRoutes(db));
+  app.route("/", checkRoutes(db, redis));
 
   return app;
 }

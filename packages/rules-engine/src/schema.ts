@@ -3,6 +3,7 @@ import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
   boolean,
   check,
+  customType,
   date,
   index,
   integer,
@@ -16,6 +17,16 @@ import {
   unique,
   uuid,
 } from "drizzle-orm/pg-core";
+
+// ---------------------------------------------------------------------------
+// Custom column types
+// ---------------------------------------------------------------------------
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -229,6 +240,79 @@ export const wosSyncState = pgTable("wos_sync_state", {
   lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
   syncCursor: text("sync_cursor"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2: Agent Identity Tables
+// ---------------------------------------------------------------------------
+
+/** Cryptographic agent identities with Ed25519 keypairs. */
+export const agentIdentities = pgTable(
+  "agent_identities",
+  {
+    id: uuid().defaultRandom().primaryKey(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    agentId: text("agent_id").notNull().unique(),
+    did: text().notNull().unique(),
+    publicKey: bytea("public_key").notNull(),
+    status: text().notNull().default("active"),
+    name: text(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    check(
+      "agent_identities_status_check",
+      sql`${table.status} IN ('active', 'suspended', 'revoked')`,
+    ),
+    index("agent_identities_org_idx").on(table.orgId),
+  ],
+);
+
+/** Lineage records tracking agent-to-sponsor delegation chains. */
+export const agentLineage = pgTable(
+  "agent_lineage",
+  {
+    id: uuid().defaultRandom().primaryKey(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agentIdentities.agentId),
+    parentId: text("parent_id").notNull(),
+    parentType: text("parent_type").notNull(),
+    sponsorUserId: text("sponsor_user_id").notNull(),
+    sponsorMembershipId: text("sponsor_membership_id").notNull(),
+    sponsorRoleAtCreation: text("sponsor_role_at_creation"),
+    sponsorEnvelopeSnapshot: jsonb("sponsor_envelope_snapshot").notNull(),
+    lineage: jsonb().notNull(),
+    signature: text().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [
+    check(
+      "agent_lineage_parent_type_check",
+      sql`${table.parentType} IN ('user', 'agent')`,
+    ),
+    index("agent_lineage_sponsor_idx").on(table.sponsorUserId),
+  ],
+);
+
+/** Encrypted Ed25519 seeds for agent key recovery. */
+export const agentKeySeeds = pgTable("agent_key_seeds", {
+  id: uuid().defaultRandom().primaryKey(),
+  orgId: uuid("org_id")
+    .notNull()
+    .references(() => organizations.id),
+  agentId: text("agent_id")
+    .notNull()
+    .references(() => agentIdentities.agentId)
+    .unique(),
+  encryptedSeed: bytea("encrypted_seed").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
 /** One-time exception requests (petitions). */

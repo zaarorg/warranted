@@ -5,8 +5,11 @@ import {
   organizations,
   groups,
   workosProcessedEvents,
+  agentIdentities,
+  agentLineage,
 } from "@warranted/rules-engine";
 import type { DrizzleDB } from "@warranted/rules-engine";
+import type { RedisClient } from "../redis";
 
 export interface WebhookEvent {
   id: string;
@@ -16,6 +19,7 @@ export interface WebhookEvent {
 
 export interface WebhookDeps {
   verifySignature?: (payload: string, sigHeader: string, secret: string) => Promise<WebhookEvent>;
+  redis?: RedisClient | null;
 }
 
 async function defaultVerifySignature(
@@ -39,6 +43,7 @@ async function defaultVerifySignature(
  */
 export function workosWebhookRoutes(db: DrizzleDB, deps: WebhookDeps = {}): Hono {
   const verifySignature = deps.verifySignature ?? defaultVerifySignature;
+  const redis = deps.redis ?? null;
   const app = new Hono();
 
   app.post("/", async (c) => {
@@ -72,7 +77,7 @@ export function workosWebhookRoutes(db: DrizzleDB, deps: WebhookDeps = {}): Hono
 
     // 3. Process the event
     try {
-      await handleEvent(db, event);
+      await handleEvent(db, event, redis);
     } catch (err) {
       console.error(`Error processing webhook event ${event.id}:`, err);
       // Still record the event to prevent reprocessing of broken events
@@ -90,7 +95,11 @@ export function workosWebhookRoutes(db: DrizzleDB, deps: WebhookDeps = {}): Hono
   return app;
 }
 
-async function handleEvent(db: DrizzleDB, event: WebhookEvent): Promise<void> {
+async function handleEvent(
+  db: DrizzleDB,
+  event: WebhookEvent,
+  redis: RedisClient | null,
+): Promise<void> {
   const { event: eventType, data } = event;
 
   switch (eventType) {
@@ -110,19 +119,70 @@ async function handleEvent(db: DrizzleDB, event: WebhookEvent): Promise<void> {
       await handleDirectoryCreated(db, data);
       break;
 
+    case "dsync.user.suspended":
+      await handleUserSuspended(db, data, redis);
+      break;
+
     case "dsync.user.created":
     case "dsync.user.deleted":
-    case "dsync.user.suspended":
     case "organization_membership.created":
     case "organization_membership.deleted":
-      // Phase 1: log + store event ID (handled by caller).
-      // Agent lifecycle logic comes in Phase 2.
-      console.log(`Received ${eventType} event — recorded for Phase 2`);
+      console.log(`Received ${eventType} event — recorded`);
       break;
 
     default:
       console.log(`Unhandled webhook event type: ${eventType}`);
   }
+}
+
+/**
+ * When a user is suspended via SCIM, cascade suspension to all agents
+ * they sponsor. Updates both Postgres and Redis.
+ */
+async function handleUserSuspended(
+  db: DrizzleDB,
+  data: Record<string, unknown>,
+  redis: RedisClient | null,
+): Promise<void> {
+  const userId = data.id as string | undefined;
+  if (!userId) {
+    console.warn("dsync.user.suspended missing user id");
+    return;
+  }
+
+  // Find all agents where this user is the sponsor
+  const sponsoredAgents = await db
+    .select({
+      agentId: agentLineage.agentId,
+      orgId: agentLineage.orgId,
+    })
+    .from(agentLineage)
+    .where(eq(agentLineage.sponsorUserId, userId));
+
+  if (sponsoredAgents.length === 0) {
+    console.log(`User ${userId} suspended — no sponsored agents found`);
+    return;
+  }
+
+  // Suspend each agent in both Postgres and Redis
+  for (const agent of sponsoredAgents) {
+    await db
+      .update(agentIdentities)
+      .set({ status: "suspended", revokedAt: new Date() })
+      .where(eq(agentIdentities.agentId, agent.agentId));
+
+    if (redis) {
+      try {
+        await redis.set(`${agent.orgId}:status:${agent.agentId}`, "suspended");
+      } catch {
+        // Redis failure is non-fatal
+      }
+    }
+  }
+
+  console.log(
+    `User ${userId} suspended — cascaded to ${sponsoredAgents.length} agent(s)`,
+  );
 }
 
 async function handleGroupCreated(

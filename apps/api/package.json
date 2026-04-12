@@ -10,7 +10,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@warranted/identity": "workspace:*",
     "@warranted/rules-engine": "workspace:*",
+    "@noble/hashes": "^1.7.1",
+    "redis": "^4.7.0",
     "@workos-inc/node": "^8.12.1",
     "drizzle-orm": "^0.40.1",
     "hono": "^4.12.12",

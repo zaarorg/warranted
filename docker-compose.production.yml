@@ -20,16 +20,30 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    networks: [backend]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   api:
     image: warranted/rules-engine-api:${API_VERSION:-0.1.0}
     networks: [backend, frontend]
     environment:
       DATABASE_URL: postgresql://warranted:${POSTGRES_PASSWORD}@postgres:5432/warranted
+      REDIS_URL: redis://redis:6379
       PORT: "3000"
     ports:
       - "3000:3000"  # Remove in production when using Caddy proxy profile
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   sidecar:
@@ -69,4 +83,5 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
   caddy_data:

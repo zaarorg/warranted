@@ -17,6 +17,9 @@ export {
   petitions,
   workosProcessedEvents,
   wosSyncState,
+  agentIdentities,
+  agentLineage,
+  agentKeySeeds,
 } from "./schema";
 
 // Types and Zod schemas
