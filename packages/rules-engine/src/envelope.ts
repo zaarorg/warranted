@@ -177,6 +177,9 @@ export async function resolveEnvelope(
     });
   }
 
+  // Sort enrichedPolicies by name for deterministic processing order
+  enrichedPolicies.sort((a, b) => a.policyName.localeCompare(b.policyName));
+
   // Step 6+7: Resolve dimensions by action type
   const actionMap = new Map<
     string,

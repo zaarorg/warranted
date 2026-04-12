@@ -1,5 +1,9 @@
+import { sql } from "drizzle-orm";
+import { createHash } from "crypto";
 import type { DrizzleDB } from "./envelope";
 import * as schema from "./schema";
+import { generateCedar } from "./cedar-gen";
+import type { PolicyConstraint } from "./types";
 
 // ---------------------------------------------------------------------------
 // Deterministic UUIDs (used in tests and as defaults)
@@ -344,4 +348,127 @@ export async function seedTestOrg(db: DrizzleDB): Promise<void> {
     agentDid: AGENT_DID,
     groupId: PLATFORM_TEAM_ID,
   }).onConflictDoNothing();
+
+  // ---------------------------------------------------------------------------
+  // Policies: org-level allow, dept-level allow, team-level allow, deny policies
+  // ---------------------------------------------------------------------------
+
+  const ORG_SPENDING_POLICY_ID = "00000000-0000-0000-0000-000000000800";
+  const ORG_SPENDING_PV_ID = "00000000-0000-0000-0000-000000000801";
+  const DEPT_SPENDING_POLICY_ID = "00000000-0000-0000-0000-000000000810";
+  const DEPT_SPENDING_PV_ID = "00000000-0000-0000-0000-000000000811";
+  const TEAM_SPENDING_POLICY_ID = "00000000-0000-0000-0000-000000000820";
+  const TEAM_SPENDING_PV_ID = "00000000-0000-0000-0000-000000000821";
+  const SANCTIONED_VENDORS_POLICY_ID = "00000000-0000-0000-0000-000000000830";
+  const SANCTIONED_VENDORS_PV_ID = "00000000-0000-0000-0000-000000000831";
+  const HARD_CAP_POLICY_ID = "00000000-0000-0000-0000-000000000840";
+  const HARD_CAP_PV_ID = "00000000-0000-0000-0000-000000000841";
+
+  const orgTarget = `Group::"${ACME_GROUP_ID}"`;
+  const deptTarget = `Group::"${ENGINEERING_DEPT_ID}"`;
+  const teamTarget = `Group::"${PLATFORM_TEAM_ID}"`;
+
+  // 1. Org-level allow policy
+  const orgConstraints: PolicyConstraint[] = [
+    {
+      actionTypeId: ACTION_PURCHASE_INITIATE_ID,
+      actionName: "purchase.initiate",
+      dimensions: [
+        { name: "amount", kind: "numeric", max: 5000 },
+        { name: "vendor", kind: "set", members: ["aws", "azure", "gcp", "github", "vercel", "railway", "vendor-acme-001"] },
+        { name: "category", kind: "set", members: ["compute", "software-licenses", "cloud-services", "api-credits", "developer-tools"] },
+        { name: "requires_human_approval", kind: "boolean", value: true, restrictive: true },
+        { name: "budget_expiry", kind: "temporal", expiry: "2026-12-31" },
+        { name: "transactions", kind: "rate", limit: 10, window: "1 hour" },
+      ],
+    },
+  ];
+  const orgCedar = generateCedar("org-spending", 1, "allow", orgConstraints, orgTarget);
+  const orgCedarHash = createHash("sha256").update(orgCedar).digest("hex");
+
+  // 2. Dept-level allow policy (Engineering)
+  const deptConstraints: PolicyConstraint[] = [
+    {
+      actionTypeId: ACTION_PURCHASE_INITIATE_ID,
+      actionName: "purchase.initiate",
+      dimensions: [
+        { name: "amount", kind: "numeric", max: 2000 },
+      ],
+    },
+  ];
+  const deptCedar = generateCedar("engineering-spending", 1, "allow", deptConstraints, deptTarget);
+  const deptCedarHash = createHash("sha256").update(deptCedar).digest("hex");
+
+  // 3. Team-level allow policy (Platform)
+  const teamConstraints: PolicyConstraint[] = [
+    {
+      actionTypeId: ACTION_PURCHASE_INITIATE_ID,
+      actionName: "purchase.initiate",
+      dimensions: [
+        { name: "amount", kind: "numeric", max: 1000 },
+      ],
+    },
+  ];
+  const teamCedar = generateCedar("platform-team-spending", 1, "allow", teamConstraints, teamTarget);
+  const teamCedarHash = createHash("sha256").update(teamCedar).digest("hex");
+
+  // 4. Sanctioned vendors deny policy
+  const sanctionedConstraints: PolicyConstraint[] = [
+    {
+      actionTypeId: ACTION_PURCHASE_INITIATE_ID,
+      actionName: "purchase.initiate",
+      dimensions: [
+        { name: "vendor", kind: "set", members: ["sanctioned-vendor-001"] },
+      ],
+    },
+  ];
+  const sanctionedCedar = generateCedar("sanctioned-vendors", 1, "deny", sanctionedConstraints, orgTarget);
+  const sanctionedCedarHash = createHash("sha256").update(sanctionedCedar).digest("hex");
+
+  // 5. Hard transaction cap deny policy
+  const hardCapConstraints: PolicyConstraint[] = [
+    {
+      actionTypeId: ACTION_PURCHASE_INITIATE_ID,
+      actionName: "purchase.initiate",
+      dimensions: [
+        { name: "amount", kind: "numeric", max: 25000 },
+      ],
+    },
+  ];
+  const hardCapCedar = generateCedar("hard-transaction-cap", 1, "deny", hardCapConstraints, orgTarget);
+  const hardCapCedarHash = createHash("sha256").update(hardCapCedar).digest("hex");
+
+  // Insert policies
+  await db.insert(schema.policies).values([
+    { id: ORG_SPENDING_POLICY_ID, orgId: ORG_ID, name: "org-spending", domain: "finance", effect: "allow", activeVersionId: null },
+    { id: DEPT_SPENDING_POLICY_ID, orgId: ORG_ID, name: "engineering-spending", domain: "finance", effect: "allow", activeVersionId: null },
+    { id: TEAM_SPENDING_POLICY_ID, orgId: ORG_ID, name: "platform-team-spending", domain: "finance", effect: "allow", activeVersionId: null },
+    { id: SANCTIONED_VENDORS_POLICY_ID, orgId: ORG_ID, name: "sanctioned-vendors", domain: "finance", effect: "deny", activeVersionId: null },
+    { id: HARD_CAP_POLICY_ID, orgId: ORG_ID, name: "hard-transaction-cap", domain: "finance", effect: "deny", activeVersionId: null },
+  ]).onConflictDoNothing();
+
+  // Insert policy versions
+  await db.insert(schema.policyVersions).values([
+    { id: ORG_SPENDING_PV_ID, policyId: ORG_SPENDING_POLICY_ID, versionNumber: 1, constraints: orgConstraints, cedarSource: orgCedar, cedarHash: orgCedarHash, createdBy: "seed" },
+    { id: DEPT_SPENDING_PV_ID, policyId: DEPT_SPENDING_POLICY_ID, versionNumber: 1, constraints: deptConstraints, cedarSource: deptCedar, cedarHash: deptCedarHash, createdBy: "seed" },
+    { id: TEAM_SPENDING_PV_ID, policyId: TEAM_SPENDING_POLICY_ID, versionNumber: 1, constraints: teamConstraints, cedarSource: teamCedar, cedarHash: teamCedarHash, createdBy: "seed" },
+    { id: SANCTIONED_VENDORS_PV_ID, policyId: SANCTIONED_VENDORS_POLICY_ID, versionNumber: 1, constraints: sanctionedConstraints, cedarSource: sanctionedCedar, cedarHash: sanctionedCedarHash, createdBy: "seed" },
+    { id: HARD_CAP_PV_ID, policyId: HARD_CAP_POLICY_ID, versionNumber: 1, constraints: hardCapConstraints, cedarSource: hardCapCedar, cedarHash: hardCapCedarHash, createdBy: "seed" },
+  ]).onConflictDoNothing();
+
+  // Activate versions
+  await db.update(schema.policies).set({ activeVersionId: ORG_SPENDING_PV_ID }).where(sql`${schema.policies.id} = ${ORG_SPENDING_POLICY_ID}`);
+  await db.update(schema.policies).set({ activeVersionId: DEPT_SPENDING_PV_ID }).where(sql`${schema.policies.id} = ${DEPT_SPENDING_POLICY_ID}`);
+  await db.update(schema.policies).set({ activeVersionId: TEAM_SPENDING_PV_ID }).where(sql`${schema.policies.id} = ${TEAM_SPENDING_POLICY_ID}`);
+  await db.update(schema.policies).set({ activeVersionId: SANCTIONED_VENDORS_PV_ID }).where(sql`${schema.policies.id} = ${SANCTIONED_VENDORS_POLICY_ID}`);
+  await db.update(schema.policies).set({ activeVersionId: HARD_CAP_PV_ID }).where(sql`${schema.policies.id} = ${HARD_CAP_POLICY_ID}`);
+
+  // Assign policies to groups
+  await db.insert(schema.policyAssignments).values([
+    { policyId: ORG_SPENDING_POLICY_ID, groupId: ACME_GROUP_ID, agentDid: null },
+    { policyId: DEPT_SPENDING_POLICY_ID, groupId: ENGINEERING_DEPT_ID, agentDid: null },
+    { policyId: TEAM_SPENDING_POLICY_ID, groupId: PLATFORM_TEAM_ID, agentDid: null },
+    { policyId: SANCTIONED_VENDORS_POLICY_ID, groupId: ACME_GROUP_ID, agentDid: null },
+    { policyId: HARD_CAP_POLICY_ID, groupId: ACME_GROUP_ID, agentDid: null },
+  ]).onConflictDoNothing();
 }
