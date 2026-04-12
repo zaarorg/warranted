@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { setupTestDb, teardownTestDb } from "./helpers/db";
-import { seed, ORG_ID, AGENT_DID, ACTION_PURCHASE_INITIATE_ID } from "../src/seed";
+import { seed, seedTestOrg, ORG_ID, AGENT_DID, ACTION_PURCHASE_INITIATE_ID } from "../src/seed";
 import { initCedar } from "../src/cedar-wasm";
 import { CedarEvaluator } from "../src/evaluator";
 import { resolveEnvelope } from "../src/envelope";
@@ -13,6 +13,7 @@ let evaluator: CedarEvaluator;
 beforeAll(async () => {
   db = await setupTestDb();
   await seed(db);
+  await seedTestOrg(db);
   const engine = await initCedar();
   evaluator = new CedarEvaluator(engine);
   await evaluator.loadPolicySet(db, ORG_ID);

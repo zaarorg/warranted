@@ -23,15 +23,14 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { apiFetch } from "@/lib/api";
-import type { Policy } from "@/lib/types";
-
-const SEED_ORG_ID = "00000000-0000-0000-0000-000000000001";
+import type { Organization, Policy } from "@/lib/types";
 
 const DOMAINS = ["finance", "communication", "agent_delegation"] as const;
 const EFFECTS = ["allow", "deny"] as const;
 
 export default function PoliciesPage() {
   const [policies, setPolicies] = useState<Policy[]>([]);
+  const [org, setOrg] = useState<Organization | null>(null);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -43,21 +42,31 @@ export default function PoliciesPage() {
     effect: "deny" as Policy["effect"],
   });
 
-  function loadPolicies() {
+  function loadData() {
     setLoading(true);
-    apiFetch<Policy[]>("/api/policies/rules")
-      .then(setPolicies)
+    Promise.all([
+      apiFetch<Policy[]>("/api/policies/rules"),
+      apiFetch<Organization[]>("/api/policies/organizations"),
+    ])
+      .then(([p, orgs]) => {
+        setPolicies(p);
+        setOrg(orgs[0] ?? null);
+      })
       .catch(console.error)
       .finally(() => setLoading(false));
   }
 
   useEffect(() => {
-    loadPolicies();
+    loadData();
   }, []);
 
   async function handleCreate() {
     if (!form.name.trim()) {
       setCreateError("Name is required.");
+      return;
+    }
+    if (!org) {
+      setCreateError("No organization found. Create one in the Groups page first.");
       return;
     }
     setCreating(true);
@@ -67,14 +76,14 @@ export default function PoliciesPage() {
         method: "POST",
         body: JSON.stringify({
           name: form.name.trim(),
-          orgId: SEED_ORG_ID,
+          orgId: org.id,
           domain: form.domain,
           effect: form.effect,
         }),
       });
       setDialogOpen(false);
       setForm({ name: "", domain: "finance", effect: "deny" });
-      loadPolicies();
+      loadData();
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "Failed to create policy");
     } finally {

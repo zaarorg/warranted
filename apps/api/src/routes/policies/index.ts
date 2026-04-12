@@ -8,10 +8,12 @@ import { checkRoutes } from "./check";
 import { decisionsRoutes } from "./decisions";
 import { actionTypesRoutes } from "./action-types";
 import { petitionsRoutes } from "./petitions";
+import { organizationsRoutes } from "./organizations";
 
 export function policyRoutes(db: DrizzleDB): Hono {
   const app = new Hono();
 
+  app.route("/organizations", organizationsRoutes(db));
   app.route("/rules", rulesRoutes(db));
   app.route("/groups", groupsRoutes(db));
   app.route("/assignments", assignmentsRoutes(db));

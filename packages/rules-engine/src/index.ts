@@ -97,6 +97,7 @@ export type { PetitionCreate, PetitionDecide } from "./petition";
 // Seed data
 export {
   seed,
+  seedTestOrg,
   ORG_ID,
   ACME_GROUP_ID,
   FINANCE_DEPT_ID,

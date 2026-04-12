@@ -2,7 +2,7 @@ import type { DrizzleDB } from "./envelope";
 import * as schema from "./schema";
 
 // ---------------------------------------------------------------------------
-// Deterministic UUIDs
+// Deterministic UUIDs (used in tests and as defaults)
 // ---------------------------------------------------------------------------
 
 export const ORG_ID = "00000000-0000-0000-0000-000000000001";
@@ -50,38 +50,7 @@ export const DIM_PURCHASE_BUDGET_EXPIRY_ID = "00000000-0000-0000-0000-0000000006
 // ---------------------------------------------------------------------------
 
 export async function seed(db: DrizzleDB): Promise<void> {
-  // 1. Organization
-  await db.insert(schema.organizations).values({
-    id: ORG_ID,
-    name: "Acme Corp",
-    slug: "acme-corp",
-    policyVersion: 1,
-  }).onConflictDoNothing();
-
-  // 2. Group hierarchy
-  await db.insert(schema.groups).values([
-    { id: ACME_GROUP_ID, orgId: ORG_ID, name: "Acme Corp", nodeType: "org", parentId: null },
-  ]).onConflictDoNothing();
-  await db.insert(schema.groups).values([
-    { id: FINANCE_DEPT_ID, orgId: ORG_ID, name: "Finance", nodeType: "department", parentId: ACME_GROUP_ID },
-    { id: ENGINEERING_DEPT_ID, orgId: ORG_ID, name: "Engineering", nodeType: "department", parentId: ACME_GROUP_ID },
-    { id: OPERATIONS_DEPT_ID, orgId: ORG_ID, name: "Operations", nodeType: "department", parentId: ACME_GROUP_ID },
-  ]).onConflictDoNothing();
-  await db.insert(schema.groups).values([
-    { id: AP_TEAM_ID, orgId: ORG_ID, name: "Accounts Payable", nodeType: "team", parentId: FINANCE_DEPT_ID },
-    { id: TREASURY_TEAM_ID, orgId: ORG_ID, name: "Treasury", nodeType: "team", parentId: FINANCE_DEPT_ID },
-    { id: PLATFORM_TEAM_ID, orgId: ORG_ID, name: "Platform", nodeType: "team", parentId: ENGINEERING_DEPT_ID },
-    { id: MLAI_TEAM_ID, orgId: ORG_ID, name: "ML/AI", nodeType: "team", parentId: ENGINEERING_DEPT_ID },
-    { id: PROCUREMENT_TEAM_ID, orgId: ORG_ID, name: "Procurement", nodeType: "team", parentId: OPERATIONS_DEPT_ID },
-  ]).onConflictDoNothing();
-
-  // 3. Agent membership — assigned to Platform team
-  await db.insert(schema.agentGroupMemberships).values({
-    agentDid: AGENT_DID,
-    groupId: PLATFORM_TEAM_ID,
-  }).onConflictDoNothing();
-
-  // 4. Action types (14 across 3 domains)
+  // 1. Action types (14 across 3 domains)
   await db.insert(schema.actionTypes).values([
     // Finance
     { id: ACTION_PURCHASE_INITIATE_ID, domain: "finance", name: "purchase.initiate", description: "Initiate a purchase transaction" },
@@ -341,4 +310,38 @@ export async function seed(db: DrizzleDB): Promise<void> {
       rateWindow: "1 minute",
     },
   ]).onConflictDoNothing();
+}
+
+/**
+ * Seeds a test organization with group hierarchy and agent membership.
+ * Not called in production — use the dashboard UI to create organizations.
+ */
+export async function seedTestOrg(db: DrizzleDB): Promise<void> {
+  await db.insert(schema.organizations).values({
+    id: ORG_ID,
+    name: "Acme Corp",
+    slug: "acme-corp",
+    policyVersion: 1,
+  }).onConflictDoNothing();
+
+  await db.insert(schema.groups).values([
+    { id: ACME_GROUP_ID, orgId: ORG_ID, name: "Acme Corp", nodeType: "org", parentId: null },
+  ]).onConflictDoNothing();
+  await db.insert(schema.groups).values([
+    { id: FINANCE_DEPT_ID, orgId: ORG_ID, name: "Finance", nodeType: "department", parentId: ACME_GROUP_ID },
+    { id: ENGINEERING_DEPT_ID, orgId: ORG_ID, name: "Engineering", nodeType: "department", parentId: ACME_GROUP_ID },
+    { id: OPERATIONS_DEPT_ID, orgId: ORG_ID, name: "Operations", nodeType: "department", parentId: ACME_GROUP_ID },
+  ]).onConflictDoNothing();
+  await db.insert(schema.groups).values([
+    { id: AP_TEAM_ID, orgId: ORG_ID, name: "Accounts Payable", nodeType: "team", parentId: FINANCE_DEPT_ID },
+    { id: TREASURY_TEAM_ID, orgId: ORG_ID, name: "Treasury", nodeType: "team", parentId: FINANCE_DEPT_ID },
+    { id: PLATFORM_TEAM_ID, orgId: ORG_ID, name: "Platform", nodeType: "team", parentId: ENGINEERING_DEPT_ID },
+    { id: MLAI_TEAM_ID, orgId: ORG_ID, name: "ML/AI", nodeType: "team", parentId: ENGINEERING_DEPT_ID },
+    { id: PROCUREMENT_TEAM_ID, orgId: ORG_ID, name: "Procurement", nodeType: "team", parentId: OPERATIONS_DEPT_ID },
+  ]).onConflictDoNothing();
+
+  await db.insert(schema.agentGroupMemberships).values({
+    agentDid: AGENT_DID,
+    groupId: PLATFORM_TEAM_ID,
+  }).onConflictDoNothing();
 }

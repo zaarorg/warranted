@@ -122,6 +122,14 @@ export interface DimensionDefinition {
   temporalExpiry: string | null;
 }
 
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  policyVersion: number;
+  createdAt: string;
+}
+
 export interface ApiResponse<T> {
   success: boolean;
   data?: T;

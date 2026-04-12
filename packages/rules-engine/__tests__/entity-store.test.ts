@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { setupTestDb, teardownTestDb } from "./helpers/db";
 import {
   seed,
+  seedTestOrg,
   ORG_ID,
   AGENT_DID,
   PLATFORM_TEAM_ID,
@@ -18,6 +19,7 @@ let db: DrizzleDB;
 beforeAll(async () => {
   db = await setupTestDb();
   await seed(db);
+  await seedTestOrg(db);
 }, 30_000);
 
 afterAll(async () => {

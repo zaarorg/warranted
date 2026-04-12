@@ -6,7 +6,7 @@ import {
   teardownTestDb,
   getDb,
 } from "../../../packages/rules-engine/__tests__/helpers/db";
-import { seed, ORG_ID, AGENT_DID, ACME_GROUP_ID, PLATFORM_TEAM_ID, ACTION_PURCHASE_INITIATE_ID, PetitionResponseShape } from "@warranted/rules-engine";
+import { seed, seedTestOrg, ORG_ID, AGENT_DID, ACME_GROUP_ID, PLATFORM_TEAM_ID, ACTION_PURCHASE_INITIATE_ID, PetitionResponseShape } from "@warranted/rules-engine";
 import type { DrizzleDB } from "@warranted/rules-engine";
 
 let db: DrizzleDB;
@@ -27,6 +27,7 @@ function jsonReq(path: string, body: unknown, method = "POST") {
 beforeAll(async () => {
   db = await setupTestDb();
   await seed(db);
+  await seedTestOrg(db);
   app = new Hono();
   app.route("/api/policies", policyRoutes(db));
 });

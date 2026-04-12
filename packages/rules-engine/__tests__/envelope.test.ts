@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { setupTestDb, teardownTestDb } from "./helpers/db";
-import { seed } from "../src/seed";
+import { seed, seedTestOrg } from "../src/seed";
 import { resolveEnvelope } from "../src/envelope";
 import type { DrizzleDB } from "../src/envelope";
 import {
@@ -23,6 +23,7 @@ let db: DrizzleDB;
 beforeAll(async () => {
   db = await setupTestDb();
   await seed(db);
+  await seedTestOrg(db);
 }, 30_000);
 
 afterAll(async () => {
