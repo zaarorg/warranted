@@ -15,5 +15,5 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "exclude": ["node_modules", "dist", ".venv"]
+  "exclude": ["node_modules", "dist", ".venv", "apps/**/*"]
 }

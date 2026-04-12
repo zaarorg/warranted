@@ -144,12 +144,12 @@ export function generateCedar(
       blocks.push(permitLines.join("\n"));
 
       // One forbid block per dimension condition
-      for (let i = 0; i < sortedDims.length; i++) {
-        const condition = dimensionToForbidCondition(sortedDims[i]);
+      for (const dim of sortedDims) {
+        const condition = dimensionToForbidCondition(dim);
         if (condition === null) continue;
 
         const forbidLines = [
-          `// Policy: "${policyName}" (v${versionNumber}) — constraint: ${sortedDims[i].name}`,
+          `// Policy: "${policyName}" (v${versionNumber}) — constraint: ${dim.name}`,
           `forbid (`,
           `  principal in ${assignmentTarget},`,
           `  action == Action::"${constraint.actionName}",`,

@@ -6,7 +6,7 @@
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && cd apps/dashboard && tsc --noEmit && cd ../api && tsc --noEmit"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.10",
