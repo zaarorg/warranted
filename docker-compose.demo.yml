@@ -10,8 +10,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: warranted_test
-    tmpfs:
-      - /var/lib/postgresql/data
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -64,3 +64,6 @@ services:
       warranted-net:
         aliases:
           - demo-vendor
+
+volumes:
+  pgdata:
