@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
@@ -44,12 +45,88 @@ export default function GroupDetailPage() {
   const [assignError, setAssignError] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
 
+  /* add-member dialog state */
+  const [addMemberOpen, setAddMemberOpen] = useState(false);
+  const [memberDid, setMemberDid] = useState("");
+  const [addingMember, setAddingMember] = useState(false);
+  const [addMemberError, setAddMemberError] = useState<string | null>(null);
+
+  /* add-child-group dialog state */
+  const [addChildOpen, setAddChildOpen] = useState(false);
+  const [childForm, setChildForm] = useState({ name: "", nodeType: "department" as "department" | "team" });
+  const [addingChild, setAddingChild] = useState(false);
+  const [addChildError, setAddChildError] = useState<string | null>(null);
+
   const loadAssignments = useCallback(async () => {
     const a = await apiFetch<PolicyAssignment[]>(
       `/api/policies/assignments?groupId=${params.id}`,
     );
     setAssignments(a);
   }, [params.id]);
+
+  const loadMembers = useCallback(async () => {
+    const m = await apiFetch<GroupMembership[]>(
+      `/api/policies/groups/${params.id}/members`,
+    );
+    setMembers(m);
+  }, [params.id]);
+
+  const loadDescendants = useCallback(async () => {
+    const d = await apiFetch<AncestorRow[]>(
+      `/api/policies/groups/${params.id}/descendants`,
+    );
+    setDescendants(d);
+  }, [params.id]);
+
+  async function handleAddMember() {
+    if (!memberDid.trim()) {
+      setAddMemberError("Agent DID is required.");
+      return;
+    }
+    setAddingMember(true);
+    setAddMemberError(null);
+    try {
+      await apiFetch(`/api/policies/groups/${params.id}/members`, {
+        method: "POST",
+        body: JSON.stringify({ agentDid: memberDid.trim() }),
+      });
+      setAddMemberOpen(false);
+      setMemberDid("");
+      await loadMembers();
+    } catch (err) {
+      setAddMemberError(err instanceof Error ? err.message : "Failed to add member");
+    } finally {
+      setAddingMember(false);
+    }
+  }
+
+  async function handleAddChild() {
+    if (!childForm.name.trim()) {
+      setAddChildError("Name is required.");
+      return;
+    }
+    if (!group) return;
+    setAddingChild(true);
+    setAddChildError(null);
+    try {
+      await apiFetch("/api/policies/groups", {
+        method: "POST",
+        body: JSON.stringify({
+          orgId: group.orgId,
+          name: childForm.name.trim(),
+          nodeType: childForm.nodeType,
+          parentId: params.id,
+        }),
+      });
+      setAddChildOpen(false);
+      setChildForm({ name: "", nodeType: "department" });
+      await loadDescendants();
+    } catch (err) {
+      setAddChildError(err instanceof Error ? err.message : "Failed to create group");
+    } finally {
+      setAddingChild(false);
+    }
+  }
 
   useEffect(() => {
     async function load() {
@@ -139,6 +216,40 @@ export default function GroupDetailPage() {
         </TabsList>
 
         <TabsContent value="members" className="mt-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-medium text-muted-foreground">
+              {members.length} {members.length === 1 ? "member" : "members"}
+            </h2>
+            <Dialog open={addMemberOpen} onOpenChange={(open) => { setAddMemberOpen(open); if (!open) { setAddMemberError(null); setMemberDid(""); } }}>
+              <DialogTrigger render={<Button size="sm" />}>Add Member</DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Add Member</DialogTitle>
+                  <DialogDescription>
+                    Add an agent to this group by DID.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">Agent DID</label>
+                    <Input
+                      placeholder="did:mesh:..."
+                      value={memberDid}
+                      onChange={(e) => setMemberDid(e.target.value)}
+                    />
+                  </div>
+                  {addMemberError && (
+                    <p className="text-sm text-destructive">{addMemberError}</p>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button onClick={handleAddMember} disabled={addingMember}>
+                    {addingMember ? "Adding..." : "Add"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
           {members.length === 0 ? (
             <p className="text-sm text-muted-foreground">No members in this group.</p>
           ) : (
@@ -245,6 +356,49 @@ export default function GroupDetailPage() {
         </TabsContent>
 
         <TabsContent value="hierarchy" className="mt-4">
+          <div className="flex items-center justify-end mb-3">
+            <Dialog open={addChildOpen} onOpenChange={(open) => { setAddChildOpen(open); if (!open) { setAddChildError(null); setChildForm({ name: "", nodeType: "department" }); } }}>
+              <DialogTrigger render={<Button size="sm" />}>Add Child Group</DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Add Child Group</DialogTitle>
+                  <DialogDescription>
+                    Create a new group under {group.name}.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">Name</label>
+                    <Input
+                      placeholder="e.g. Engineering"
+                      value={childForm.name}
+                      onChange={(e) => setChildForm((f) => ({ ...f, name: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">Type</label>
+                    <select
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                      value={childForm.nodeType}
+                      onChange={(e) => setChildForm((f) => ({ ...f, nodeType: e.target.value as "department" | "team" }))}
+                    >
+                      <option value="department">department</option>
+                      <option value="team">team</option>
+                    </select>
+                  </div>
+                  {addChildError && (
+                    <p className="text-sm text-destructive">{addChildError}</p>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button onClick={handleAddChild} disabled={addingChild}>
+                    {addingChild ? "Creating..." : "Create"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
+
           <Card>
             <CardHeader>
               <CardTitle className="text-sm">Ancestors</CardTitle>
