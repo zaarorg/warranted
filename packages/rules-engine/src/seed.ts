@@ -23,7 +23,8 @@ export const MLAI_TEAM_ID = "00000000-0000-0000-0000-000000000022";
 export const PROCUREMENT_TEAM_ID = "00000000-0000-0000-0000-000000000031";
 
 // Agent
-export const AGENT_DID = "did:mesh:8ae56e6f93037f8ab8adefd7ee076e66bc3c98c6";
+// Deterministic DID derived from ED25519_SEED="demo-seed-123"
+export const AGENT_DID = "did:mesh:bf30e3839373bfbc2571603751ba147830d5a300";
 
 // Action types
 export const ACTION_PURCHASE_INITIATE_ID = "00000000-0000-0000-0000-000000000100";

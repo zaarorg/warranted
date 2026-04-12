@@ -28,18 +28,12 @@ app = FastAPI()
 # ---------------------------------------------------------------------------
 # Crypto identity — deterministic from seed or random at startup
 # ---------------------------------------------------------------------------
-ED25519_SEED = os.environ.get("ED25519_SEED")
+ED25519_SEED = os.environ.get("ED25519_SEED", "demo-seed-123")
 
-if ED25519_SEED:
-    # Derive a deterministic 32-byte seed from the env var
-    _seed_bytes = hashlib.sha256(ED25519_SEED.encode()).digest()
-    PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(_seed_bytes)
-    logger.info("Ed25519 key derived from ED25519_SEED (deterministic)")
-else:
-    PRIVATE_KEY = Ed25519PrivateKey.generate()
-    logger.warning(
-        "ED25519_SEED not set — using random key. DID will change on restart."
-    )
+# Derive a deterministic 32-byte seed from the env var
+_seed_bytes = hashlib.sha256(ED25519_SEED.encode()).digest()
+PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(_seed_bytes)
+logger.info("Ed25519 key derived from ED25519_SEED (deterministic)")
 
 PUBLIC_KEY = PRIVATE_KEY.public_key()
 PUBLIC_KEY_B64 = base64.b64encode(
