@@ -1,3 +1,7 @@
+# Other
+Untitled
+.playwright-mcp/
+
 # Claude
 .mcp.json
 .claude/tracking
@@ -166,6 +170,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!apps/dashboard/src/lib/
 lib64/
 parts/
 sdist/

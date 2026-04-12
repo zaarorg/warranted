@@ -527,7 +527,7 @@ describe("CreateSessionRequestSchema", () => {
       items: [{ sku: "gpu-hours-100" }],
     });
     expect(result.transactionType).toBe("fixed-price");
-    expect(result.items[0].quantity).toBe(1);
+    expect(result.items[0]!.quantity).toBe(1);
   });
 
   it("rejects empty items array", () => {

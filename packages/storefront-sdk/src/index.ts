@@ -24,7 +24,10 @@ export {
 export {
   verifyIdentity,
   verifyAuthorization,
+  localAuthorizationCheck,
+  engineAuthorizationCheck,
   type AuthorizationResult,
+  type EngineAuthorizationDeps,
 } from "./verify";
 
 export {

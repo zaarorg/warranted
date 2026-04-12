@@ -1,0 +1,142 @@
+# Warranted Governance Demo
+#
+# End-to-end demo: start all services, create a policy in the dashboard,
+# then interact with the OpenClaw agent to verify governance enforcement.
+#
+# Prerequisites (one-time):
+#   docker network create warranted-net
+#
+# Run with:
+#   prose run examples/openclaw/warranted-demo.prose
+#
+# =============================================================================
+# STARTUP SEQUENCE
+# =============================================================================
+#
+# From a fresh computer restart, run these commands in a terminal:
+#
+#   1. Start Docker (if not auto-starting):
+#      sudo systemctl start docker
+#
+#   2. Create the shared Docker network (one-time only):
+#      docker network create warranted-net
+#
+#   3. Start the Warranted backend services:
+#      cd ~/Documents/projects/ai_engineering/gauntlet-curriculum/capstone/warranted
+#      docker compose -f docker-compose.demo.yml up -d
+#
+#      This starts 4 services in order:
+#        - postgres (port 5432) -- database, waits for healthcheck
+#        - api (port 3000) -- Hono API, auto-runs migrations + seeds
+#        - sidecar (port 8100) -- Python governance sidecar
+#        - demo-vendor (port 3002) -- storefront for purchase testing
+#
+#   4. Start the dashboard:
+#      cd ~/Documents/projects/ai_engineering/gauntlet-curriculum/capstone/warranted/apps/dashboard
+#      bun install
+#      NEXT_PUBLIC_API_URL=http://localhost:3000 bun run dev --port 3001 &
+#
+#   5. Kill any conflicting local sidecar process:
+#      lsof -ti :8100 | xargs kill 2>/dev/null
+#
+#   6. Start the OpenClaw gateway:
+#      cd ~/Documents/projects/ai_engineering/gauntlet-curriculum/capstone/openclaw
+#      docker compose up -d
+#
+#   7. Verify everything is running:
+#      docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+#
+#      Expected containers:
+#        warranted-postgres-1         -- port 5432
+#        warranted-api-1              -- port 3000
+#        warranted-sidecar-1          -- port 8100
+#        warranted-demo-vendor-1      -- port 3002
+#        openclaw-openclaw-gateway-1  -- port 18789
+#
+# =============================================================================
+# CREATING A POLICY IN THE DASHBOARD
+# =============================================================================
+#
+#   8. Open the dashboard at http://localhost:3001/policies
+#
+#   9. Click "Create Policy" and fill in:
+#        Name:   gpu-spending-cap
+#        Domain: finance
+#        Effect: deny
+#
+#  10. Click into the new policy and use the "Create Version" form:
+#        Action type: purchase.initiate
+#        Dimensions:
+#          amount (numeric): max 500
+#          category (set): gpu
+#        Submit -- this generates Cedar policy source and activates it
+#
+#  11. Assign the policy to a group:
+#        Go to Groups, assign the policy to Platform team, or via CLI:
+#
+#        curl -s http://localhost:3000/api/policies/rules | \
+#          python3 -c "import sys,json; [print(f\"{p['id']}  {p['name']}\") for p in json.load(sys.stdin)['data']]"
+#
+#        curl -s -X POST http://localhost:3000/api/policies/assignments \
+#          -H "Content-Type: application/json" \
+#          -d '{"policyId":"<POLICY_ID>","groupId":"00000000-0000-0000-0000-000000000021"}'
+#
+# =============================================================================
+# PORTS QUICK REFERENCE
+# =============================================================================
+#
+#   Dashboard:   http://localhost:3001  -- Policy management UI
+#   API:         http://localhost:3000  -- REST API (rules engine)
+#   Sidecar:     http://localhost:8100  -- Agent governance (identity, auth)
+#   Demo Vendor: http://localhost:3002  -- Storefront for purchase testing
+#   OpenClaw:    http://localhost:18789 -- Agent chat UI
+#
+# =============================================================================
+# AGENT WORKFLOW
+# =============================================================================
+
+# Define the governed agent
+agent governed-buyer:
+  model: sonnet
+  prompt: "You are a governed AI agent with the warranted-identity skill. Use curl to interact with the governance sidecar at http://warranted-sidecar:8100 and the demo vendor at http://demo-vendor:3001. Always check your identity and authorization before making purchases."
+
+# Step 1: Verify agent identity on the governance sidecar
+let identity = session: governed-buyer
+  prompt: "Check your identity using the warranted-identity skill. Run: curl -s http://warranted-sidecar:8100/check_identity -- Report your agent ID, DID, spending limit, and approved vendors."
+
+# Step 2: View all governance policies
+let policies = session: governed-buyer
+  prompt: "View all policies governing you. Run: curl -s http://warranted-sidecar:8100/my_policies -- Summarize each policy name, effect, and what it constrains."
+  context: identity
+
+# Step 3: Test authorization for a permitted purchase
+let auth-allowed = session: governed-buyer
+  prompt: "Check if you are authorized to purchase $500 of compute from aws. Run: curl -s -X POST 'http://warranted-sidecar:8100/check_authorization?vendor=aws&amount=500&category=compute' -- Report whether it was authorized and why."
+  context: policies
+
+# Step 4: Test authorization for a denied purchase (over limit)
+let auth-denied = session: governed-buyer
+  prompt: "Check if you are authorized to purchase $6000 of compute from aws. Run: curl -s -X POST 'http://warranted-sidecar:8100/check_authorization?vendor=aws&amount=6000&category=compute' -- Report whether it was denied and the reasons."
+  context: policies
+
+# Step 5: Test authorization against the new dashboard policy
+let auth-gpu = session: governed-buyer
+  prompt: "Check if you are authorized to purchase $1000 of gpu from aws. Run: curl -s -X POST 'http://warranted-sidecar:8100/check_authorization?vendor=aws&amount=1000&category=gpu' -- Report whether the gpu-spending-cap policy blocked this."
+  context: policies
+
+# Step 6: Full purchase flow on the demo vendor storefront
+let purchase = session: governed-buyer
+  prompt: |
+    Complete a full purchase on the demo vendor storefront:
+    1. Get a token: curl -s -X POST http://warranted-sidecar:8100/issue_token
+    2. Discover storefront: curl -s http://demo-vendor:3001/.well-known/agent-storefront.json
+    3. Browse catalog: curl -s -H "Authorization: Bearer TOKEN" http://demo-vendor:3001/agent-checkout/catalog
+    4. Create session for an item under your spending limit: curl -s -X POST -H "Authorization: Bearer TOKEN" -H "Content-Type: application/json" -d '{"items":[{"sku":"SKU","quantity":1}],"transactionType":"fixed-price"}' http://demo-vendor:3001/agent-checkout/session
+    5. Settle: curl -s -X POST -H "Authorization: Bearer TOKEN" http://demo-vendor:3001/agent-checkout/session/SESSION_ID/settle
+    Replace TOKEN, SKU, and SESSION_ID with actual values from each step. Show me the receipt when done.
+  context: [identity, auth-allowed]
+
+# Step 7: Summarize the governance demo
+session: governed-buyer
+  prompt: "Summarize this governance demo: what identity you have, what policies govern you, which purchases were allowed vs denied and why, and show the purchase receipt. Highlight how the compliance infrastructure protected the transaction."
+  context: [identity, policies, auth-allowed, auth-denied, auth-gpu, purchase]

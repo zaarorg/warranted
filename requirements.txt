@@ -2,5 +2,6 @@ agent-os-kernel[full]
 agentmesh-runtime
 inter-agent-trust-protocol
 fastapi
+httpx
 uvicorn
 PyJWT[crypto]

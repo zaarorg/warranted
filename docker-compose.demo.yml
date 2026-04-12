@@ -1,0 +1,69 @@
+networks:
+  default:
+  warranted-net:
+    external: true
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: warranted_test
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/warranted_test
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  sidecar:
+    build:
+      context: .
+      dockerfile: sidecar/Dockerfile
+    environment:
+      ED25519_SEED: demo-seed-123
+      RULES_ENGINE_URL: http://api:3000/api/policies/check
+      PORT: "8100"
+    ports:
+      - "8100:8100"
+    depends_on:
+      - api
+    networks:
+      default:
+      warranted-net:
+        aliases:
+          - warranted-sidecar
+
+  demo-vendor:
+    image: oven/bun:1.3
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: bun run examples/openclaw/scripts/demo-vendor-server.ts
+    ports:
+      - "3002:3001"
+    depends_on:
+      - sidecar
+    networks:
+      default:
+      warranted-net:
+        aliases:
+          - demo-vendor
+
+volumes:
+  pgdata:
