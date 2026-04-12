@@ -6,7 +6,7 @@ import {
   teardownTestDb,
   getDb,
 } from "../../../packages/rules-engine/__tests__/helpers/db";
-import { seed, ORG_ID, AGENT_DID, ACME_GROUP_ID, PLATFORM_TEAM_ID, ACTION_PURCHASE_INITIATE_ID, POLICY_AGENT_SPENDING_LIMIT_ID, PetitionResponseShape } from "@warranted/rules-engine";
+import { seed, ORG_ID, AGENT_DID, ACME_GROUP_ID, PLATFORM_TEAM_ID, ACTION_PURCHASE_INITIATE_ID, PetitionResponseShape } from "@warranted/rules-engine";
 import type { DrizzleDB } from "@warranted/rules-engine";
 
 let db: DrizzleDB;
@@ -325,7 +325,7 @@ describe("management API", () => {
 
     it("rejects assignment with both groupId and agentDid", async () => {
       const res = await jsonReq("/api/policies/assignments", {
-        policyId: POLICY_AGENT_SPENDING_LIMIT_ID,
+        policyId: "00000000-0000-0000-0000-000000000999",
         groupId: ACME_GROUP_ID,
         agentDid: AGENT_DID,
       });
@@ -334,7 +334,7 @@ describe("management API", () => {
 
     it("rejects assignment with neither groupId nor agentDid", async () => {
       const res = await jsonReq("/api/policies/assignments", {
-        policyId: POLICY_AGENT_SPENDING_LIMIT_ID,
+        policyId: "00000000-0000-0000-0000-000000000999",
       });
       expect(res.status).toBe(400);
     });

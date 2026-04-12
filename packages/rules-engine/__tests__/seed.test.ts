@@ -15,20 +15,9 @@ import {
   PROCUREMENT_TEAM_ID,
   AGENT_DID,
   ACTION_PURCHASE_INITIATE_ID,
-  POLICY_AGENT_SPENDING_LIMIT_ID,
-  POLICY_HARD_TRANSACTION_CAP_ID,
-  POLICY_APPROVED_VENDORS_ID,
-  POLICY_SANCTIONED_VENDORS_ID,
-  POLICY_PERMITTED_CATEGORIES_ID,
-  POLICY_HOURLY_RATE_LIMIT_ID,
-  POLICY_DAILY_SPEND_CEILING_ID,
-  POLICY_ESCALATION_THRESHOLD_ID,
-  POLICY_COOLING_OFF_PERIOD_ID,
-  POLICY_ENG_DEPT_SPENDING_ID,
-  POLICY_PLATFORM_TEAM_SPENDING_ID,
 } from "../src/seed";
 import * as schema from "../src/schema";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 let db: DrizzleDB;
 
@@ -149,64 +138,9 @@ describe("seed data", () => {
     expect(budgetExpiry!.kind).toBe("temporal");
   });
 
-  it("all 9 spending-policy.yaml rules have corresponding policies", async () => {
-    const policyNames = [
-      "agent-spending-limit",
-      "hard-transaction-cap",
-      "approved-vendors",
-      "sanctioned-vendors",
-      "permitted-categories",
-      "hourly-rate-limit",
-      "daily-spend-ceiling",
-      "escalation-threshold",
-      "cooling-off-period",
-    ];
-
+  it("no policies are seeded", async () => {
     const allPolicies = await db.select().from(schema.policies);
-    for (const name of policyNames) {
-      const found = allPolicies.find((p) => p.name === name);
-      expect(found, `Policy "${name}" should exist`).toBeDefined();
-    }
-  });
-
-  it("policies have active versions with Cedar source", async () => {
-    const allPolicies = await db.select().from(schema.policies);
-    const policyVersions = await db.select().from(schema.policyVersions);
-
-    // All seeded policies should have active versions
-    for (const policy of allPolicies) {
-      expect(policy.activeVersionId, `Policy "${policy.name}" should have activeVersionId`).toBeTruthy();
-
-      const version = policyVersions.find((v) => v.id === policy.activeVersionId);
-      expect(version, `Policy "${policy.name}" version should exist`).toBeDefined();
-      expect(version!.cedarSource.length).toBeGreaterThan(0);
-      expect(version!.cedarHash.length).toBe(64); // SHA-256 hex
-    }
-  });
-
-  it("cascading policies at different hierarchy levels", async () => {
-    const assignments = await db.select().from(schema.policyAssignments);
-
-    // Org-level: agent-spending-limit at Acme Corp root
-    const orgAssignment = assignments.find(
-      (a) => a.policyId === POLICY_AGENT_SPENDING_LIMIT_ID,
-    );
-    expect(orgAssignment).toBeDefined();
-    expect(orgAssignment!.groupId).toBe(ACME_GROUP_ID);
-
-    // Dept-level: engineering-dept-spending at Engineering
-    const deptAssignment = assignments.find(
-      (a) => a.policyId === POLICY_ENG_DEPT_SPENDING_ID,
-    );
-    expect(deptAssignment).toBeDefined();
-    expect(deptAssignment!.groupId).toBe(ENGINEERING_DEPT_ID);
-
-    // Team-level: platform-team-spending at Platform
-    const teamAssignment = assignments.find(
-      (a) => a.policyId === POLICY_PLATFORM_TEAM_SPENDING_ID,
-    );
-    expect(teamAssignment).toBeDefined();
-    expect(teamAssignment!.groupId).toBe(PLATFORM_TEAM_ID);
+    expect(allPolicies).toHaveLength(0);
   });
 
   it("OpenClaw agent DID assigned to Engineering > Platform", async () => {
@@ -219,27 +153,8 @@ describe("seed data", () => {
     expect(memberships[0]!.groupId).toBe(PLATFORM_TEAM_ID);
   });
 
-  it("policy assignments reference correct groups", async () => {
+  it("no policy assignments are seeded", async () => {
     const assignments = await db.select().from(schema.policyAssignments);
-
-    // All org-level policies should be assigned to ACME_GROUP_ID
-    const orgPolicyIds = [
-      POLICY_AGENT_SPENDING_LIMIT_ID,
-      POLICY_HARD_TRANSACTION_CAP_ID,
-      POLICY_APPROVED_VENDORS_ID,
-      POLICY_SANCTIONED_VENDORS_ID,
-      POLICY_PERMITTED_CATEGORIES_ID,
-      POLICY_HOURLY_RATE_LIMIT_ID,
-      POLICY_DAILY_SPEND_CEILING_ID,
-      POLICY_ESCALATION_THRESHOLD_ID,
-      POLICY_COOLING_OFF_PERIOD_ID,
-    ];
-
-    for (const policyId of orgPolicyIds) {
-      const assignment = assignments.find((a) => a.policyId === policyId);
-      expect(assignment, `Policy ${policyId} should have assignment`).toBeDefined();
-      expect(assignment!.groupId).toBe(ACME_GROUP_ID);
-      expect(assignment!.agentDid).toBeNull();
-    }
+    expect(assignments).toHaveLength(0);
   });
 });
