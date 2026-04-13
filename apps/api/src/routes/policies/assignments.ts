@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
-import { policyAssignments } from "@warranted/rules-engine";
+import { and, eq, inArray } from "drizzle-orm";
+import { policyAssignments, policies, ORG_ID } from "@warranted/rules-engine";
 import type { DrizzleDB } from "@warranted/rules-engine";
 import { z } from "zod";
 
@@ -20,36 +20,54 @@ const CreateAssignmentSchema = z
 export function assignmentsRoutes(db: DrizzleDB): Hono {
   const app = new Hono();
 
-  // GET / — List assignments (filter by groupId or agentDid)
+  // GET / — List assignments (filter by groupId or agentDid, org-scoped)
   app.get("/", async (c) => {
+    const orgId = c.get("orgId") ?? ORG_ID;
     const groupId = c.req.query("groupId");
     const agentDid = c.req.query("agentDid");
 
-    let query;
-    if (groupId) {
-      query = db
-        .select()
-        .from(policyAssignments)
-        .where(eq(policyAssignments.groupId, groupId));
-    } else if (agentDid) {
-      query = db
-        .select()
-        .from(policyAssignments)
-        .where(eq(policyAssignments.agentDid, agentDid));
-    } else {
-      query = db.select().from(policyAssignments);
+    // Get policy IDs belonging to this org
+    const orgPolicies = await db
+      .select({ id: policies.id })
+      .from(policies)
+      .where(eq(policies.orgId, orgId));
+    const orgPolicyIds = orgPolicies.map((p) => p.id);
+
+    if (orgPolicyIds.length === 0) {
+      return c.json({ success: true, data: [] });
     }
 
-    const rows = await query;
+    const conditions = [inArray(policyAssignments.policyId, orgPolicyIds)];
+    if (groupId) {
+      conditions.push(eq(policyAssignments.groupId, groupId));
+    } else if (agentDid) {
+      conditions.push(eq(policyAssignments.agentDid, agentDid));
+    }
+
+    const rows = await db
+      .select()
+      .from(policyAssignments)
+      .where(and(...conditions));
+
     return c.json({ success: true, data: rows });
   });
 
-  // POST / — Assign policy to group or agent
+  // POST / — Assign policy to group or agent (org-scoped)
   app.post("/", async (c) => {
+    const orgId = c.get("orgId") ?? ORG_ID;
     const body = await c.req.json();
     const parsed = CreateAssignmentSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ success: false, error: parsed.error.format() }, 400);
+    }
+
+    // Verify policy belongs to this org
+    const policyRows = await db
+      .select()
+      .from(policies)
+      .where(and(eq(policies.id, parsed.data.policyId), eq(policies.orgId, orgId)));
+    if (policyRows.length === 0) {
+      return c.json({ success: false, error: "Policy not found" }, 404);
     }
 
     const [row] = await db
@@ -64,16 +82,32 @@ export function assignmentsRoutes(db: DrizzleDB): Hono {
     return c.json({ success: true, data: row }, 201);
   });
 
-  // DELETE /:id — Remove assignment
+  // DELETE /:id — Remove assignment (org-scoped)
   app.delete("/:id", async (c) => {
+    const orgId = c.get("orgId") ?? ORG_ID;
     const id = c.req.param("id");
-    const rows = await db
-      .delete(policyAssignments)
-      .where(eq(policyAssignments.id, id))
-      .returning();
-    if (rows.length === 0) {
+
+    // Verify assignment's policy belongs to this org
+    const assignmentRows = await db
+      .select()
+      .from(policyAssignments)
+      .where(eq(policyAssignments.id, id));
+    if (assignmentRows.length === 0) {
       return c.json({ success: false, error: "Assignment not found" }, 404);
     }
+
+    const policyRows = await db
+      .select()
+      .from(policies)
+      .where(and(eq(policies.id, assignmentRows[0]!.policyId), eq(policies.orgId, orgId)));
+    if (policyRows.length === 0) {
+      return c.json({ success: false, error: "Assignment not found" }, 404);
+    }
+
+    await db
+      .delete(policyAssignments)
+      .where(eq(policyAssignments.id, id));
+
     return c.json({ success: true, data: { deleted: true } });
   });
 

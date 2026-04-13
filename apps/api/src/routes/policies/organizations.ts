@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { organizations, groups } from "@warranted/rules-engine";
+import { organizations, groups, seedDefaultTools, ORG_ID } from "@warranted/rules-engine";
 import type { DrizzleDB } from "@warranted/rules-engine";
 import { z } from "zod";
 
@@ -12,9 +12,10 @@ const CreateOrgSchema = z.object({
 export function organizationsRoutes(db: DrizzleDB): Hono {
   const app = new Hono();
 
-  // GET / — List all organizations
+  // GET / — List organizations (scoped to authenticated org)
   app.get("/", async (c) => {
-    const rows = await db.select().from(organizations);
+    const orgId = c.get("orgId") ?? ORG_ID;
+    const rows = await db.select().from(organizations).where(eq(organizations.id, orgId));
     return c.json({ success: true, data: rows });
   });
 
@@ -35,7 +36,7 @@ export function organizationsRoutes(db: DrizzleDB): Hono {
       return c.json({ success: false, error: "Organization slug already exists" }, 409);
     }
 
-    // Create org and root group in a transaction
+    // Create org, root group, and default tools in a transaction
     const result = await db.transaction(async (tx) => {
       const [org] = await tx
         .insert(organizations)
@@ -56,15 +57,23 @@ export function organizationsRoutes(db: DrizzleDB): Hono {
         })
         .returning();
 
+      // Seed default action types for the new org
+      await seedDefaultTools(tx, org!.id);
+
       return { org: org!, rootGroup: rootGroup! };
     });
 
     return c.json({ success: true, data: result }, 201);
   });
 
-  // GET /:id — Get organization by ID
+  // GET /:id — Get organization by ID (scoped to authenticated org)
   app.get("/:id", async (c) => {
     const id = c.req.param("id");
+    const orgId = c.get("orgId") ?? ORG_ID;
+    // Only allow access to the authenticated org
+    if (id !== orgId) {
+      return c.json({ success: false, error: "Organization not found" }, 404);
+    }
     const rows = await db
       .select()
       .from(organizations)

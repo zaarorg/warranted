@@ -361,6 +361,7 @@ describe("envelope resolution", () => {
     await db.insert(schema.agentGroupMemberships).values({
       agentDid: AGENT_DID,
       groupId: AP_TEAM_ID,
+      orgId: ORG_ID,
     });
 
     // Add AP team spending policy with amount max 500

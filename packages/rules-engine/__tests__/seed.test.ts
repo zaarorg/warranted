@@ -31,9 +31,10 @@ afterAll(async () => {
 }, 10_000);
 
 describe("seed data", () => {
-  it("does not seed organizations or groups", async () => {
+  it("seeds the default organization but no groups", async () => {
     const orgs = await db.select().from(schema.organizations);
-    expect(orgs).toHaveLength(0);
+    expect(orgs).toHaveLength(1);
+    expect(orgs[0]!.name).toBe("Acme Corp");
 
     const allGroups = await db.select().from(schema.groups);
     expect(allGroups).toHaveLength(0);

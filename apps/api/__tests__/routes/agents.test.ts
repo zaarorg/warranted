@@ -52,7 +52,7 @@ describe("sponsor synthetic DID (om_*)", () => {
     // Insert sponsor into agentGroupMemberships with the Platform Team group
     await db
       .insert(agentGroupMemberships)
-      .values({ agentDid: sponsorDid, groupId: PLATFORM_TEAM_ID });
+      .values({ agentDid: sponsorDid, groupId: PLATFORM_TEAM_ID, orgId: ORG_ID });
 
     // resolveEnvelope should work for the synthetic DID
     const envelope = await resolveEnvelope(db, sponsorDid, ORG_ID);
@@ -73,7 +73,7 @@ describe("agent creation (the seam)", () => {
     // Ensure sponsor has group membership
     await db
       .insert(agentGroupMemberships)
-      .values({ agentDid: sponsorDid, groupId: PLATFORM_TEAM_ID })
+      .values({ agentDid: sponsorDid, groupId: PLATFORM_TEAM_ID, orgId: ORG_ID })
       .onConflictDoNothing();
 
     // Get sponsor envelope for snapshot
@@ -107,7 +107,7 @@ describe("agent creation (the seam)", () => {
 
       await tx
         .insert(agentGroupMemberships)
-        .values({ agentDid: identity.did, groupId: PLATFORM_TEAM_ID })
+        .values({ agentDid: identity.did, groupId: PLATFORM_TEAM_ID, orgId: ORG_ID })
         .onConflictDoNothing();
 
       await tx.insert(agentKeySeeds).values({
@@ -267,7 +267,7 @@ describe("narrowing invariant with real envelope", () => {
     // Insert sponsor into a group
     await db
       .insert(agentGroupMemberships)
-      .values({ agentDid: sponsorDid, groupId: PLATFORM_TEAM_ID })
+      .values({ agentDid: sponsorDid, groupId: PLATFORM_TEAM_ID, orgId: ORG_ID })
       .onConflictDoNothing();
 
     const sponsorEnvelope = await resolveEnvelope(db, sponsorDid, ORG_ID);

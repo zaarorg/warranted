@@ -103,6 +103,7 @@ export type { PetitionCreate, PetitionDecide } from "./petition";
 export {
   seed,
   seedTestOrg,
+  seedDefaultTools,
   ORG_ID,
   ACME_GROUP_ID,
   FINANCE_DEPT_ID,

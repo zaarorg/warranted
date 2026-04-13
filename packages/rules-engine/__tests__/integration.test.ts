@@ -114,6 +114,7 @@ describe("end-to-end integration", () => {
 
   it("decision log can be written after evaluation", async () => {
     await db.insert(schema.decisionLog).values({
+      orgId: ORG_ID,
       agentDid: AGENT_DID,
       actionTypeId: ACTION_PURCHASE_INITIATE_ID,
       requestContext: { amount: 500, vendor: "aws", category: "compute" },

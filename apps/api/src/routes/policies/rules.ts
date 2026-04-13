@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { createHash } from "crypto";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   policies,
   policyVersions,
@@ -8,13 +8,13 @@ import {
   policyAssignments,
   PolicyConstraintSchema,
   generateCedar,
+  ORG_ID,
 } from "@warranted/rules-engine";
 import type { DrizzleDB } from "@warranted/rules-engine";
 import { z } from "zod";
 
 const CreatePolicySchema = z.object({
   name: z.string().min(1),
-  orgId: z.string().uuid(),
   domain: z.enum(["finance", "communication", "agent_delegation"]),
   effect: z.enum(["allow", "deny"]),
 });
@@ -32,17 +32,14 @@ const CreateVersionSchema = z.object({
 export function rulesRoutes(db: DrizzleDB): Hono {
   const app = new Hono();
 
-  // GET / — List all policies
+  // GET / — List all policies (org-scoped)
   app.get("/", async (c) => {
-    const orgId = c.req.query("orgId");
-    const query = orgId
-      ? db.select().from(policies).where(eq(policies.orgId, orgId))
-      : db.select().from(policies);
-    const rows = await query;
+    const orgId = c.get("orgId") ?? ORG_ID;
+    const rows = await db.select().from(policies).where(eq(policies.orgId, orgId));
     return c.json({ success: true, data: rows });
   });
 
-  // POST / — Create policy
+  // POST / — Create policy (org-scoped)
   app.post("/", async (c) => {
     const body = await c.req.json();
     const parsed = CreatePolicySchema.safeParse(body);
@@ -50,11 +47,13 @@ export function rulesRoutes(db: DrizzleDB): Hono {
       return c.json({ success: false, error: parsed.error.format() }, 400);
     }
 
+    const orgId = c.get("orgId") ?? ORG_ID;
+
     const [row] = await db
       .insert(policies)
       .values({
         name: parsed.data.name,
-        orgId: parsed.data.orgId,
+        orgId,
         domain: parsed.data.domain,
         effect: parsed.data.effect,
         activeVersionId: null,
@@ -64,26 +63,28 @@ export function rulesRoutes(db: DrizzleDB): Hono {
     return c.json({ success: true, data: row }, 201);
   });
 
-  // GET /:id — Get policy by ID
+  // GET /:id — Get policy by ID (org-scoped)
   app.get("/:id", async (c) => {
     const id = c.req.param("id");
-    const rows = await db.select().from(policies).where(eq(policies.id, id));
+    const orgId = c.get("orgId") ?? ORG_ID;
+    const rows = await db.select().from(policies).where(and(eq(policies.id, id), eq(policies.orgId, orgId)));
     if (rows.length === 0) {
       return c.json({ success: false, error: "Policy not found" }, 404);
     }
     return c.json({ success: true, data: rows[0] });
   });
 
-  // PUT /:id — Update policy metadata
+  // PUT /:id — Update policy metadata (org-scoped)
   app.put("/:id", async (c) => {
     const id = c.req.param("id");
+    const orgId = c.get("orgId") ?? ORG_ID;
     const body = await c.req.json();
     const parsed = UpdatePolicySchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ success: false, error: parsed.error.format() }, 400);
     }
 
-    const existing = await db.select().from(policies).where(eq(policies.id, id));
+    const existing = await db.select().from(policies).where(and(eq(policies.id, id), eq(policies.orgId, orgId)));
     if (existing.length === 0) {
       return c.json({ success: false, error: "Policy not found" }, 404);
     }
@@ -99,25 +100,34 @@ export function rulesRoutes(db: DrizzleDB): Hono {
     const [row] = await db
       .update(policies)
       .set(updates)
-      .where(eq(policies.id, id))
+      .where(and(eq(policies.id, id), eq(policies.orgId, orgId)))
       .returning();
 
     return c.json({ success: true, data: row });
   });
 
-  // DELETE /:id — Delete policy
+  // DELETE /:id — Delete policy (org-scoped)
   app.delete("/:id", async (c) => {
     const id = c.req.param("id");
-    const rows = await db.delete(policies).where(eq(policies.id, id)).returning();
+    const orgId = c.get("orgId") ?? ORG_ID;
+    const rows = await db.delete(policies).where(and(eq(policies.id, id), eq(policies.orgId, orgId))).returning();
     if (rows.length === 0) {
       return c.json({ success: false, error: "Policy not found" }, 404);
     }
     return c.json({ success: true, data: { deleted: true } });
   });
 
-  // GET /:id/versions — List versions
+  // GET /:id/versions — List versions (org-scoped)
   app.get("/:id/versions", async (c) => {
     const policyId = c.req.param("id");
+    const orgId = c.get("orgId") ?? ORG_ID;
+
+    // Verify the policy belongs to this org
+    const policyRows = await db.select().from(policies).where(and(eq(policies.id, policyId), eq(policies.orgId, orgId)));
+    if (policyRows.length === 0) {
+      return c.json({ success: false, error: "Policy not found" }, 404);
+    }
+
     const rows = await db
       .select()
       .from(policyVersions)
@@ -135,8 +145,9 @@ export function rulesRoutes(db: DrizzleDB): Hono {
       return c.json({ success: false, error: parsed.error.format() }, 400);
     }
 
-    // Get the policy
-    const policyRows = await db.select().from(policies).where(eq(policies.id, policyId));
+    // Get the policy (org-scoped)
+    const orgId = c.get("orgId") ?? ORG_ID;
+    const policyRows = await db.select().from(policies).where(and(eq(policies.id, policyId), eq(policies.orgId, orgId)));
     if (policyRows.length === 0) {
       return c.json({ success: false, error: "Policy not found" }, 404);
     }
@@ -230,7 +241,8 @@ export function rulesRoutes(db: DrizzleDB): Hono {
       return c.json({ success: false, error: "Version not found for this policy" }, 404);
     }
 
-    const policyRows = await db.select().from(policies).where(eq(policies.id, policyId));
+    const orgId = c.get("orgId") ?? ORG_ID;
+    const policyRows = await db.select().from(policies).where(and(eq(policies.id, policyId), eq(policies.orgId, orgId)));
     if (policyRows.length === 0) {
       return c.json({ success: false, error: "Policy not found" }, 404);
     }

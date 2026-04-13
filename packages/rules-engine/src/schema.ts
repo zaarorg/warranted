@@ -105,17 +105,27 @@ export const agentGroupMemberships = pgTable(
     groupId: uuid("group_id")
       .notNull()
       .references(() => groups.id, { onDelete: "cascade" }),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
   },
   (table) => [primaryKey({ columns: [table.agentDid, table.groupId] })],
 );
 
-/** Typed agent actions (14 seeded across 3 domains). */
-export const actionTypes = pgTable("action_types", {
-  id: uuid().defaultRandom().primaryKey(),
-  domain: domainEnum().notNull(),
-  name: text().notNull().unique(),
-  description: text(),
-});
+/** Typed agent actions (14 seeded across 3 domains). Org-scoped with per-org unique names. */
+export const actionTypes = pgTable(
+  "action_types",
+  {
+    id: uuid().defaultRandom().primaryKey(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    domain: domainEnum().notNull(),
+    name: text().notNull(),
+    description: text(),
+  },
+  (table) => [unique("action_types_org_name_unique").on(table.orgId, table.name)],
+);
 
 /** Constraint schema per action type — defines what dimensions are available. */
 export const dimensionDefinitions = pgTable(
@@ -202,6 +212,9 @@ export const decisionLog = pgTable(
   "decision_log",
   {
     id: uuid().defaultRandom().primaryKey(),
+    orgId: uuid("org_id")
+      .notNull()
+      .references(() => organizations.id),
     evaluatedAt: timestamp("evaluated_at", { withTimezone: true }).notNull().defaultNow(),
     agentDid: text("agent_did").notNull(),
     actionTypeId: uuid("action_type_id")
@@ -220,6 +233,7 @@ export const decisionLog = pgTable(
     index("decision_log_agent_time_idx").on(table.agentDid, table.evaluatedAt),
     index("decision_log_outcome_time_idx").on(table.outcome, table.evaluatedAt),
     index("decision_log_bundle_hash_idx").on(table.bundleHash),
+    index("decision_log_org_time_idx").on(table.orgId, table.evaluatedAt),
   ],
 );
 

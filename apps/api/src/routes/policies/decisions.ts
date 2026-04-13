@@ -1,13 +1,14 @@
 import { Hono } from "hono";
 import { eq, sql, and, gte, lte } from "drizzle-orm";
-import { decisionLog } from "@warranted/rules-engine";
+import { decisionLog, ORG_ID } from "@warranted/rules-engine";
 import type { DrizzleDB } from "@warranted/rules-engine";
 
 export function decisionsRoutes(db: DrizzleDB): Hono {
   const app = new Hono();
 
-  // GET / — List decisions (filters: agentDid, outcome, dateRange; pagination)
+  // GET / — List decisions (org-scoped, filters: agentDid, outcome, dateRange; pagination)
   app.get("/", async (c) => {
+    const orgId = c.get("orgId") ?? ORG_ID;
     const agentDid = c.req.query("agentDid");
     const outcome = c.req.query("outcome");
     const after = c.req.query("after");
@@ -15,7 +16,7 @@ export function decisionsRoutes(db: DrizzleDB): Hono {
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
     const offset = parseInt(c.req.query("offset") ?? "0", 10);
 
-    const conditions = [];
+    const conditions = [eq(decisionLog.orgId, orgId)];
     if (agentDid) {
       conditions.push(eq(decisionLog.agentDid, agentDid));
     }
@@ -44,10 +45,11 @@ export function decisionsRoutes(db: DrizzleDB): Hono {
     return c.json({ success: true, data: rows });
   });
 
-  // GET /:id — Get single decision with envelope snapshot
+  // GET /:id — Get single decision with envelope snapshot (org-scoped)
   app.get("/:id", async (c) => {
     const id = c.req.param("id");
-    const rows = await db.select().from(decisionLog).where(eq(decisionLog.id, id));
+    const orgId = c.get("orgId") ?? ORG_ID;
+    const rows = await db.select().from(decisionLog).where(and(eq(decisionLog.id, id), eq(decisionLog.orgId, orgId)));
     if (rows.length === 0) {
       return c.json({ success: false, error: "Decision not found" }, 404);
     }

@@ -53,26 +53,34 @@ export const DIM_PURCHASE_BUDGET_EXPIRY_ID = "00000000-0000-0000-0000-0000000006
 // Seed Function
 // ---------------------------------------------------------------------------
 
-export async function seed(db: DrizzleDB): Promise<void> {
+export async function seed(db: DrizzleDB, orgId: string = ORG_ID): Promise<void> {
+  // 0. Ensure the org exists (action types now require org_id FK)
+  await db.insert(schema.organizations).values({
+    id: orgId,
+    name: "Acme Corp",
+    slug: "acme-corp",
+    policyVersion: 0,
+  }).onConflictDoNothing();
+
   // 1. Action types (14 across 3 domains)
   await db.insert(schema.actionTypes).values([
     // Finance
-    { id: ACTION_PURCHASE_INITIATE_ID, domain: "finance", name: "purchase.initiate", description: "Initiate a purchase transaction" },
-    { id: ACTION_PURCHASE_APPROVE_ID, domain: "finance", name: "purchase.approve", description: "Approve a purchase transaction" },
-    { id: ACTION_BUDGET_ALLOCATE_ID, domain: "finance", name: "budget.allocate", description: "Allocate budget to department" },
-    { id: ACTION_BUDGET_TRANSFER_ID, domain: "finance", name: "budget.transfer", description: "Transfer budget between departments" },
-    { id: ACTION_EXPENSE_SUBMIT_ID, domain: "finance", name: "expense.submit", description: "Submit an expense report" },
-    { id: ACTION_EXPENSE_APPROVE_ID, domain: "finance", name: "expense.approve", description: "Approve an expense report" },
+    { id: ACTION_PURCHASE_INITIATE_ID, orgId, domain: "finance", name: "purchase.initiate", description: "Initiate a purchase transaction" },
+    { id: ACTION_PURCHASE_APPROVE_ID, orgId, domain: "finance", name: "purchase.approve", description: "Approve a purchase transaction" },
+    { id: ACTION_BUDGET_ALLOCATE_ID, orgId, domain: "finance", name: "budget.allocate", description: "Allocate budget to department" },
+    { id: ACTION_BUDGET_TRANSFER_ID, orgId, domain: "finance", name: "budget.transfer", description: "Transfer budget between departments" },
+    { id: ACTION_EXPENSE_SUBMIT_ID, orgId, domain: "finance", name: "expense.submit", description: "Submit an expense report" },
+    { id: ACTION_EXPENSE_APPROVE_ID, orgId, domain: "finance", name: "expense.approve", description: "Approve an expense report" },
     // Communication
-    { id: ACTION_EMAIL_SEND_ID, domain: "communication", name: "email.send", description: "Send an internal email" },
-    { id: ACTION_EMAIL_SEND_EXTERNAL_ID, domain: "communication", name: "email.send_external", description: "Send an external email" },
-    { id: ACTION_MEETING_SCHEDULE_ID, domain: "communication", name: "meeting.schedule", description: "Schedule a meeting" },
-    { id: ACTION_DOCUMENT_SHARE_ID, domain: "communication", name: "document.share", description: "Share a document" },
+    { id: ACTION_EMAIL_SEND_ID, orgId, domain: "communication", name: "email.send", description: "Send an internal email" },
+    { id: ACTION_EMAIL_SEND_EXTERNAL_ID, orgId, domain: "communication", name: "email.send_external", description: "Send an external email" },
+    { id: ACTION_MEETING_SCHEDULE_ID, orgId, domain: "communication", name: "meeting.schedule", description: "Schedule a meeting" },
+    { id: ACTION_DOCUMENT_SHARE_ID, orgId, domain: "communication", name: "document.share", description: "Share a document" },
     // Agent delegation
-    { id: ACTION_AGENT_DELEGATE_ID, domain: "agent_delegation", name: "agent.delegate", description: "Delegate authority to another agent" },
-    { id: ACTION_AGENT_CREATE_ID, domain: "agent_delegation", name: "agent.create", description: "Create a new agent" },
-    { id: ACTION_AGENT_REVOKE_ID, domain: "agent_delegation", name: "agent.revoke", description: "Revoke an agent" },
-    { id: ACTION_API_CALL_ID, domain: "agent_delegation", name: "api.call", description: "Call an external API" },
+    { id: ACTION_AGENT_DELEGATE_ID, orgId, domain: "agent_delegation", name: "agent.delegate", description: "Delegate authority to another agent" },
+    { id: ACTION_AGENT_CREATE_ID, orgId, domain: "agent_delegation", name: "agent.create", description: "Create a new agent" },
+    { id: ACTION_AGENT_REVOKE_ID, orgId, domain: "agent_delegation", name: "agent.revoke", description: "Revoke an agent" },
+    { id: ACTION_API_CALL_ID, orgId, domain: "agent_delegation", name: "api.call", description: "Call an external API" },
   ]).onConflictDoNothing();
 
   // 5. Dimension definitions for purchase.initiate
@@ -328,6 +336,10 @@ export async function seedTestOrg(db: DrizzleDB): Promise<void> {
     policyVersion: 1,
   }).onConflictDoNothing();
 
+  // Ensure policyVersion is 1 even if org was created by seed() with default 0
+  await db.update(schema.organizations)
+    .set({ policyVersion: 1 })
+    .where(sql`${schema.organizations.id} = ${ORG_ID}`);
   await db.insert(schema.groups).values([
     { id: ACME_GROUP_ID, orgId: ORG_ID, name: "Acme Corp", nodeType: "org", parentId: null },
   ]).onConflictDoNothing();
@@ -347,6 +359,7 @@ export async function seedTestOrg(db: DrizzleDB): Promise<void> {
   await db.insert(schema.agentGroupMemberships).values({
     agentDid: AGENT_DID,
     groupId: PLATFORM_TEAM_ID,
+    orgId: ORG_ID,
   }).onConflictDoNothing();
 
   // ---------------------------------------------------------------------------
@@ -471,4 +484,36 @@ export async function seedTestOrg(db: DrizzleDB): Promise<void> {
     { policyId: SANCTIONED_VENDORS_POLICY_ID, groupId: ACME_GROUP_ID, agentDid: null },
     { policyId: HARD_CAP_POLICY_ID, groupId: ACME_GROUP_ID, agentDid: null },
   ]).onConflictDoNothing();
+}
+
+// ---------------------------------------------------------------------------
+// Default Tools Seeder (for new orgs)
+// ---------------------------------------------------------------------------
+
+/** Default action type definitions seeded for every new organization. */
+const DEFAULT_TOOLS: { domain: "finance" | "communication" | "agent_delegation"; name: string; description: string }[] = [
+  { domain: "finance", name: "purchase.initiate", description: "Initiate a purchase transaction" },
+  { domain: "finance", name: "purchase.approve", description: "Approve a purchase transaction" },
+  { domain: "finance", name: "budget.allocate", description: "Allocate budget to department" },
+  { domain: "finance", name: "budget.transfer", description: "Transfer budget between departments" },
+  { domain: "finance", name: "expense.submit", description: "Submit an expense report" },
+  { domain: "finance", name: "expense.approve", description: "Approve an expense report" },
+  { domain: "communication", name: "email.send", description: "Send an internal email" },
+  { domain: "communication", name: "email.send_external", description: "Send an external email" },
+  { domain: "communication", name: "meeting.schedule", description: "Schedule a meeting" },
+  { domain: "communication", name: "document.share", description: "Share a document" },
+  { domain: "agent_delegation", name: "agent.delegate", description: "Delegate authority to another agent" },
+  { domain: "agent_delegation", name: "agent.create", description: "Create a new agent" },
+  { domain: "agent_delegation", name: "agent.revoke", description: "Revoke an agent" },
+  { domain: "agent_delegation", name: "api.call", description: "Call an external API" },
+];
+
+/**
+ * Seeds the default set of action types for a new organization.
+ * Idempotent — uses onConflictDoNothing to handle re-runs.
+ */
+export async function seedDefaultTools(db: DrizzleDB, orgId: string): Promise<void> {
+  await db.insert(schema.actionTypes)
+    .values(DEFAULT_TOOLS.map((t) => ({ ...t, orgId })))
+    .onConflictDoNothing();
 }

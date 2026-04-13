@@ -54,19 +54,20 @@ export async function resolveEnvelope(
   agentDid: string,
   orgId: string,
 ): Promise<ResolvedEnvelope> {
-  // Step 1+2: Find agent's groups and walk ancestors via recursive CTE
+  // Step 1+2: Find agent's groups and walk ancestors via recursive CTE (org-scoped)
   const ancestors = await db.execute(sql`
     WITH RECURSIVE ancestors AS (
       SELECT g.id, g.parent_id, g.name, g.node_type, 0 AS depth
       FROM ${schema.groups} g
       JOIN ${schema.agentGroupMemberships} m ON m.group_id = g.id
-      WHERE m.agent_did = ${agentDid}
+      WHERE m.agent_did = ${agentDid} AND m.org_id = ${orgId}
 
       UNION ALL
 
       SELECT g.id, g.parent_id, g.name, g.node_type, a.depth + 1
       FROM ${schema.groups} g
       JOIN ancestors a ON g.id = a.parent_id
+      WHERE g.org_id = ${orgId}
     )
     SELECT * FROM ancestors
   `);

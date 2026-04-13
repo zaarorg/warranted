@@ -63,6 +63,7 @@ describe("entity store", () => {
     await db.insert(schema.agentGroupMemberships).values({
       agentDid: AGENT_DID,
       groupId: MLAI_TEAM_ID,
+      orgId: ORG_ID,
     });
 
     const entities = await buildEntityStore(db, ORG_ID);

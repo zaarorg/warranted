@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, inArray, or } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import {
   resolveEnvelope,
   policies,
@@ -13,24 +13,25 @@ import type { DrizzleDB } from "@warranted/rules-engine";
 export function envelopeRoutes(db: DrizzleDB): Hono {
   const app = new Hono();
 
-  // GET /agents/:did/envelope — Resolve effective envelope
+  // GET /agents/:did/envelope — Resolve effective envelope (org-scoped)
   app.get("/agents/:did/envelope", async (c) => {
     const agentDid = c.req.param("did");
-    const orgId = c.req.query("orgId") ?? ORG_ID;
+    const orgId = c.get("orgId") ?? ORG_ID;
 
     const envelope = await resolveEnvelope(db, agentDid, orgId);
     return c.json({ success: true, data: envelope });
   });
 
-  // GET /agents/:did/policies — List all policies applying to agent
+  // GET /agents/:did/policies — List all policies applying to agent (org-scoped)
   app.get("/agents/:did/policies", async (c) => {
     const agentDid = c.req.param("did");
+    const orgId = c.get("orgId") ?? ORG_ID;
 
-    // Get groups the agent belongs to
+    // Get groups the agent belongs to (org-scoped)
     const memberships = await db
       .select({ groupId: agentGroupMemberships.groupId })
       .from(agentGroupMemberships)
-      .where(eq(agentGroupMemberships.agentDid, agentDid));
+      .where(and(eq(agentGroupMemberships.agentDid, agentDid), eq(agentGroupMemberships.orgId, orgId)));
 
     const groupIds = memberships.map((m) => m.groupId);
 
@@ -51,11 +52,11 @@ export function envelopeRoutes(db: DrizzleDB): Hono {
       return c.json({ success: true, data: [] });
     }
 
-    // Load policies with active versions
+    // Load policies with active versions (org-scoped)
     const policyRows = await db
       .select()
       .from(policies)
-      .where(inArray(policies.id, policyIds));
+      .where(and(inArray(policies.id, policyIds), eq(policies.orgId, orgId)));
 
     const activeVersionIds = policyRows
       .map((p) => p.activeVersionId)

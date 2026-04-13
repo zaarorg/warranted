@@ -60,7 +60,9 @@ export function createAuthMiddleware(db: DrizzleDB) {
 
       c.set("userId", userId);
       await next();
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown auth error";
+      console.error("Auth middleware error:", { message });
       return c.json({ success: false, error: "Invalid or expired session" }, 401);
     }
   });

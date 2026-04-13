@@ -65,6 +65,7 @@ export async function setupTestDb(): Promise<DrizzleDB> {
     CREATE TABLE agent_group_memberships (
       agent_did TEXT NOT NULL,
       group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+      org_id UUID NOT NULL REFERENCES organizations(id),
       PRIMARY KEY (agent_did, group_id)
     )
   `);
@@ -72,9 +73,11 @@ export async function setupTestDb(): Promise<DrizzleDB> {
   await db.execute(sql`
     CREATE TABLE action_types (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id),
       domain domain NOT NULL,
-      name TEXT NOT NULL UNIQUE,
-      description TEXT
+      name TEXT NOT NULL,
+      description TEXT,
+      UNIQUE (org_id, name)
     )
   `);
 
@@ -135,6 +138,7 @@ export async function setupTestDb(): Promise<DrizzleDB> {
   await db.execute(sql`
     CREATE TABLE decision_log (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id UUID NOT NULL REFERENCES organizations(id),
       evaluated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       agent_did TEXT NOT NULL,
       action_type_id UUID NOT NULL REFERENCES action_types(id),
@@ -147,6 +151,10 @@ export async function setupTestDb(): Promise<DrizzleDB> {
       sdk_error_code TEXT,
       envelope_snapshot JSONB
     )
+  `);
+
+  await db.execute(sql`
+    CREATE INDEX decision_log_org_time_idx ON decision_log(org_id, evaluated_at)
   `);
 
   await db.execute(sql`

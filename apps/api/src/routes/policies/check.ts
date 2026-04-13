@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   CheckRequestSchema,
   CedarEvaluator,
@@ -37,39 +37,45 @@ export function checkRoutes(db: DrizzleDB, redis?: RedisClient | null): Hono {
       return c.json({ success: false, error: parsed.error.format() }, 400);
     }
 
-    const orgId = (c.req.query("orgId") ?? ORG_ID);
-
-    // Extract agent DID from principal early — needed for Redis check
+    // Extract agent DID from principal early — needed for Redis check and org derivation
     const principalMatch = parsed.data.principal.match(/^Agent::"(.+)"$/);
     const agentDid = principalMatch?.[1] ?? parsed.data.principal;
 
-    // Check agent suspension status via Redis before Cedar evaluation
-    if (redis) {
-      try {
-        // Look up the agent's agentId from their DID
-        const [agent] = await db
-          .select({ agentId: agentIdentities.agentId, orgId: agentIdentities.orgId })
-          .from(agentIdentities)
-          .where(eq(agentIdentities.did, agentDid));
+    // Derive org from agent identity — never trust self-asserted orgId
+    let orgId: string = ORG_ID;
+    let agentRecord: { agentId: string; orgId: string } | undefined;
+    try {
+      const [agent] = await db
+        .select({ agentId: agentIdentities.agentId, orgId: agentIdentities.orgId })
+        .from(agentIdentities)
+        .where(eq(agentIdentities.did, agentDid));
+      if (agent) {
+        orgId = agent.orgId;
+        agentRecord = agent;
+      }
+    } catch {
+      // DB lookup failure — fall back to ORG_ID for pre-Phase 2 agents
+    }
 
-        if (agent) {
-          const statusKey = `${agent.orgId}:status:${agent.agentId}`;
-          const status = await redis.get(statusKey);
-          if (status === "suspended" || status === "revoked") {
-            return c.json({
-              success: true,
-              data: {
-                decision: "Deny" as const,
-                diagnostics: [`Agent is ${status}`],
-                engineCode: null,
-                sdkCode: null,
-                details: {},
-              },
-            });
-          }
+    // Check agent suspension status via Redis before Cedar evaluation
+    if (redis && agentRecord) {
+      try {
+        const statusKey = `${agentRecord.orgId}:status:${agentRecord.agentId}`;
+        const status = await redis.get(statusKey);
+        if (status === "suspended" || status === "revoked") {
+          return c.json({
+            success: true,
+            data: {
+              decision: "Deny" as const,
+              diagnostics: [`Agent is ${status}`],
+              engineCode: null,
+              sdkCode: null,
+              details: {},
+            },
+          });
         }
       } catch {
-        // Redis/DB lookup failure is non-fatal — fall through to Cedar
+        // Redis lookup failure is non-fatal — fall through to Cedar
       }
     }
 
@@ -81,11 +87,11 @@ export function checkRoutes(db: DrizzleDB, redis?: RedisClient | null): Hono {
     const actionMatch = parsed.data.action.match(/^Action::"(.+)"$/);
     const actionName = actionMatch?.[1] ?? parsed.data.action;
 
-    // Look up action type ID
+    // Look up action type ID (org-scoped)
     const actionTypeRows = await db
       .select({ id: actionTypes.id })
       .from(actionTypes)
-      .where(eq(actionTypes.name, actionName));
+      .where(and(eq(actionTypes.name, actionName), eq(actionTypes.orgId, orgId)));
     const actionTypeId = actionTypeRows[0]?.id;
 
     // Resolve envelope for snapshot
@@ -97,9 +103,10 @@ export function checkRoutes(db: DrizzleDB, redis?: RedisClient | null): Hono {
       // Envelope resolution failure is non-fatal for logging
     }
 
-    // Write decision log entry
+    // Write decision log entry (org-scoped)
     if (actionTypeId) {
       await db.insert(decisionLog).values({
+        orgId,
         agentDid,
         actionTypeId,
         requestContext: parsed.data.context,
